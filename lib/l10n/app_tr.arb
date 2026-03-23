@@ -1,0 +1,15 @@
+{
+  "@@locale": "tr",
+  "appTitle": "SafeHer",
+  "safe": "Güvenli",
+  "unsafe": "Güvensiz",
+  "sendSOS": "SOS Gönder",
+  "cancel": "İptal",
+  "history": "SOS Geçmişi",
+  "stats": "İstatistikler",
+  "safeRegions": "Güvenli Bölgeler",
+  "unsafeRegions": "Güvensiz Bölgeler",
+  "myContributions": "Benim Katkılarım",
+  "mySOS": "Gönderdiğim SOS",
+  "noSOS": "Henüz SOS kaydı yok"
+}

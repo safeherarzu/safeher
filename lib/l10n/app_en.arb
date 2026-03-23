@@ -1,0 +1,15 @@
+{
+  "@@locale": "en",
+  "appTitle": "SafeHer",
+  "safe": "Safe",
+  "unsafe": "Unsafe",
+  "sendSOS": "Send SOS",
+  "cancel": "Cancel",
+  "history": "SOS History",
+  "stats": "Statistics",
+  "safeRegions": "Safe Regions",
+  "unsafeRegions": "Unsafe Regions",
+  "myContributions": "My Contributions",
+  "mySOS": "My SOS",
+  "noSOS": "No SOS records yet"
+}
