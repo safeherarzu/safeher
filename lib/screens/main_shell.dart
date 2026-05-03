@@ -17,11 +17,16 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
-  final _pages = const [
-    HomeMapScreen(),
-    SosScreen(),
-    ProfileScreen(),
-  ];
+  /// Keep one instance per tab once built; defer SOS/profile until first opened.
+  final List<Widget?> _pages = [null, null, null];
+
+  Widget _tabSlot(int i, Widget Function() create) {
+    if (_pages[i] != null) return _pages[i]!;
+    if (i != _index) return const SizedBox.shrink();
+    final w = create();
+    _pages[i] = w;
+    return w;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +41,12 @@ class _MainShellState extends State<MainShell> {
       child: Scaffold(
         body: IndexedStack(
           index: _index,
-          children: _pages,
+          sizing: StackFit.expand,
+          children: [
+            _tabSlot(0, () => const HomeMapScreen()),
+            _tabSlot(1, () => const SosScreen()),
+            _tabSlot(2, () => const ProfileScreen()),
+          ],
         ),
         appBar: AppBar(
           title: Row(

@@ -45,6 +45,8 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>GMSApiKey</key>
+	<string>AIzaSyAP_Q0NbvJ0jkhxmZ1ys06rDwsxkdMyIsY</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Konumunuz, haritada güvenlik pinleri ve SOS konum paylaşımı için kullanılır.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
