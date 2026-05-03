@@ -67,6 +67,11 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
 
+# iOS App Store: objective_c 9.3+ can fail validation (missing dSYM UUID).
+# Pin until resolved — see https://github.com/dart-lang/native/issues/3004
+dependency_overrides:
+  objective_c: 9.1.0
+
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
