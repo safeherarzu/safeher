@@ -1,0 +1,35 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="shieldGrad" x1="180" y1="260" x2="760" y2="860" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DB7FF"/>
+      <stop offset="0.48" stop-color="#4A5CFF"/>
+      <stop offset="1" stop-color="#FF4DB7"/>
+    </linearGradient>
+    <linearGradient id="topGrad" x1="370" y1="120" x2="660" y2="280" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6BCBFF"/>
+      <stop offset="0.5" stop-color="#9D5BFF"/>
+      <stop offset="1" stop-color="#FF89D4"/>
+    </linearGradient>
+    <linearGradient id="sGrad" x1="340" y1="380" x2="700" y2="690" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1A59FF"/>
+      <stop offset="0.45" stop-color="#5A2EFF"/>
+      <stop offset="1" stop-color="#FF3FB4"/>
+    </linearGradient>
+    <linearGradient id="whiteGloss" x1="300" y1="350" x2="640" y2="710" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#DFE6FF"/>
+    </linearGradient>
+  </defs>
+  <path d="M313 301c-21-33-21-79 0-112" stroke="url(#topGrad)" stroke-width="24" stroke-linecap="round" fill="none"/>
+  <path d="M711 301c21-33 21-79 0-112" stroke="#FF7DCF" stroke-width="24" stroke-linecap="round" fill="none"/>
+  <path d="M369 286c-15-24-15-58 0-82" stroke="#7D65FF" stroke-width="22" stroke-linecap="round" fill="none"/>
+  <path d="M655 286c15-24 15-58 0-82" stroke="#F25BC8" stroke-width="22" stroke-linecap="round" fill="none"/>
+  <path d="M425 273c-9-15-9-36 0-51" stroke="#973CFF" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <path d="M599 273c9-15 9-36 0-51" stroke="#E74CBF" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <circle cx="512" cy="167" r="24" fill="#FF7ACD"/>
+  <path d="M462 260c0-30 22-54 50-54 29 0 50 24 50 54v22h-100z" fill="#FF5ABF"/>
+  <path d="M512 351c132 0 218 18 218 18v184c0 169-141 256-218 298-77-42-218-129-218-298V369s86-18 218-18z" fill="url(#shieldGrad)"/>
+  <path d="M512 381c113 0 188 14 188 14v154c0 138-116 210-188 251-72-41-188-113-188-251V395s75-14 188-14z" fill="none" stroke="#FFFFFF" stroke-opacity=".45" stroke-width="4"/>
+  <path d="M650 452c-18-21-53-37-108-37-65 0-118 29-118 81 0 46 39 63 103 82 52 15 81 24 81 52 0 27-30 44-76 44-41 0-75-15-95-37l-43 43c31 34 81 54 137 54 90 0 151-46 151-109 0-57-44-79-113-98-48-14-71-23-71-44 0-22 24-37 62-37 34 0 60 12 77 29z" fill="url(#whiteGloss)"/>
+  <path d="M650 452c-18-21-53-37-108-37-65 0-118 29-118 81 0 46 39 63 103 82 52 15 81 24 81 52 0 27-30 44-76 44-41 0-75-15-95-37l-43 43c31 34 81 54 137 54 90 0 151-46 151-109 0-57-44-79-113-98-48-14-71-23-71-44 0-22 24-37 62-37 34 0 60 12 77 29z" fill="none" stroke="url(#sGrad)" stroke-opacity=".4" stroke-width="5"/>
+</svg>

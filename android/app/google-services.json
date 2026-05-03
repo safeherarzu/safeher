@@ -45,6 +45,25 @@
     },
     {
       "client_info": {
+        "mobilesdk_app_id": "1:506037878629:android:6778f1299719e75de7eb8c",
+        "android_client_info": {
+          "package_name": "com.safeher.safeher"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyACex1qOjAuRR9t8ubCz6lwgDpNPhhzT1I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:506037878629:android:daa9745968e41ec3e7eb8c",
         "android_client_info": {
           "package_name": "com.safeher.womensafety"

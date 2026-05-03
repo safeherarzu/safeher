@@ -1,0 +1,60 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidLatLng(data) {
+      return data.lat is number
+        && data.lng is number
+        && data.lat >= -90 && data.lat <= 90
+        && data.lng >= -180 && data.lng <= 180;
+    }
+
+    // Public map pins: readable by signed-in users, writable by signed-in users.
+    match /locations/{pinId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasOnly([
+          'lat', 'lng', 'type', 'tags', 'likes', 'dislikes', 'userId', 'createdAt'
+        ])
+        && request.resource.data.type in ['safe', 'danger']
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.likes == 0
+        && request.resource.data.dislikes == 0
+        && request.resource.data.tags is list
+        && request.resource.data.tags.size() <= 8
+        && isValidLatLng(request.resource.data);
+      allow update: if isSignedIn()
+        // Allow only community vote increments.
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['likes', 'dislikes'])
+        && request.resource.data.likes is int
+        && request.resource.data.dislikes is int
+        && request.resource.data.likes >= resource.data.likes
+        && request.resource.data.dislikes >= resource.data.dislikes
+        && request.resource.data.likes <= resource.data.likes + 1
+        && request.resource.data.dislikes <= resource.data.dislikes + 1;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // SOS logs are private per user.
+    match /sos_logs/{logId} {
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if isSignedIn()
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // Basic report queue for moderation.
+    match /reports/{reportId} {
+      allow create: if isSignedIn()
+        && request.resource.data.keys().hasAll([
+          'targetId', 'reason', 'createdAt'
+        ]);
+      allow read: if isSignedIn();
+      allow update, delete: if false;
+    }
+  }
+}
+

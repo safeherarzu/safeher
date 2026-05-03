@@ -1,104 +1,54 @@
-import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'onboarding_page.dart';
-import 'main_screen.dart';
-import 'theme.dart';
-import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+
 import 'firebase_options.dart';
-import 'login_page.dart';
+import 'services/app_language_service.dart';
+import 'screens/startup_flow.dart';
+import 'theme/app_theme.dart';
 
-vvoid main() async {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  await Firebase.initializeApp();
-
-  // 🔔 İZİN İSTE
-  await FirebaseMessaging.instance.requestPermission();
-
-  // 🔔 TOPIC'E ABONE OL
-  await FirebaseMessaging.instance.subscribeToTopic("safeher");
-
-  runApp(MyApp());
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  } else {
+    // iOS will use ios/Runner/GoogleService-Info.plist
+    await Firebase.initializeApp();
+  }
+  await AppLanguageService.instance.init();
+  runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'SafeHer',
-      theme: AppTheme.lightTheme,
-      debugShowCheckedModeBanner: false,
-      home: FutureBuilder(
-        future: SharedPreferences.getInstance(),
-        builder: (context, snapshot) {
-
-          if (!snapshot.hasData) {
-            return const Scaffold(
-              body: Center(
-                child: CircularProgressIndicator(),
-              ),
-            );
-          }
-
-          final prefs = snapshot.data!;
-          bool seen = prefs.getBool("seenOnboarding") ?? false;
-
-          if (seen) {
-            return const AuthWrapper();
-          }
-
-          return const OnboardingPage();
-        },
-      ),
-    );
-  }
+  State<MyApp> createState() => _MyAppState();
 }
 
-class AuthWrapper extends StatelessWidget {
-  const AuthWrapper({super.key});
-
-  Future<void> _createUserDocument(User user) async {
-    final userDoc =
-        FirebaseFirestore.instance.collection("users").doc(user.uid);
-
-    final snapshot = await userDoc.get();
-
-    if (!snapshot.exists) {
-      await userDoc.set({
-        "safeCount": 0,
-        "unsafeCount": 0,
-        "totalUpVotes": 0,
-        "totalDownVotes": 0,
-        "sosCount": 0,
-        "createdAt": Timestamp.now(),
-      });
-    }
-  }
-
+class _MyAppState extends State<MyApp> {
   @override
   Widget build(BuildContext context) {
-
-    return StreamBuilder<User?>(
-      stream: FirebaseAuth.instance.authStateChanges(),
-      builder: (context, snapshot) {
-
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        if (snapshot.hasData) {
-          _createUserDocument(snapshot.data!);
-          return const MainScreen();
-        }
-
-        return const LoginPage();
+    return ValueListenableBuilder<Locale>(
+      valueListenable: AppLanguageService.instance.localeNotifier,
+      builder: (context, locale, _) {
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'SafeHer',
+          theme: AppTheme.materialTheme(),
+          locale: locale,
+          supportedLocales: const [
+            Locale('tr'),
+            Locale('en'),
+          ],
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: const StartupFlow(),
+        );
       },
     );
   }
