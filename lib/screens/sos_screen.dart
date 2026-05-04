@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -86,12 +87,18 @@ class _SosScreenState extends State<SosScreen> {
     setState(() => _alarmUseAlarmStream = value);
   }
 
+  void _dismissKeyboard() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
+  }
+
   Future<void> _addContact() async {
     final input = _phoneController.text.trim();
     if (input.isEmpty) return;
 
     await _contactsRepo.add(input);
     _phoneController.clear();
+    _dismissKeyboard();
     if (!mounted) return;
     await _reloadContacts();
     if (!mounted) return;
@@ -234,6 +241,7 @@ class _SosScreenState extends State<SosScreen> {
       decoration: const BoxDecoration(gradient: AppTheme.pageGradient),
       child: ListView(
         padding: const EdgeInsets.all(16),
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         children: [
           Text(
             'SOS',
@@ -274,6 +282,9 @@ class _SosScreenState extends State<SosScreen> {
                       TextField(
                         controller: _phoneController,
                         keyboardType: TextInputType.phone,
+                        textInputAction: TextInputAction.done,
+                        onEditingComplete: _dismissKeyboard,
+                        onSubmitted: (_) => _dismissKeyboard(),
                         decoration: const InputDecoration(
                           labelText: 'Telefon (örn: 905xxxxxxxxx)',
                           border: OutlineInputBorder(),
@@ -310,6 +321,7 @@ class _SosScreenState extends State<SosScreen> {
                           deleteIcon: const Icon(Icons.close),
                           deleteIconColor: const Color(0xFF5C2FA8),
                           onDeleted: () async {
+                            _dismissKeyboard();
                             await _contactsRepo.remove(phone);
                             await _reloadContacts();
                           },

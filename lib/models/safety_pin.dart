@@ -8,6 +8,8 @@ class SafetyPin {
   final List<String> tags;
   final int likes;
   final int dislikes;
+  /// Firestore `userId`; null on legacy docs or local-only pins.
+  final String? ownerUid;
 
   const SafetyPin({
     required this.id,
@@ -17,6 +19,7 @@ class SafetyPin {
     required this.tags,
     required this.likes,
     required this.dislikes,
+    this.ownerUid,
   });
 
   factory SafetyPin.fromFirestore(
@@ -27,12 +30,13 @@ class SafetyPin {
 
     return SafetyPin(
       id: doc.id,
-      lat: (data['lat'] ?? 0).toDouble(),
-      lng: (data['lng'] ?? 0).toDouble(),
+      lat: (data['lat'] as num?)?.toDouble() ?? 0,
+      lng: (data['lng'] as num?)?.toDouble() ?? 0,
       isSafe: type == 'safe',
       tags: (data['tags'] as List<dynamic>? ?? const []).cast<String>(),
-      likes: (data['likes'] ?? 0) as int,
-      dislikes: (data['dislikes'] ?? 0) as int,
+      likes: (data['likes'] as num?)?.toInt() ?? 0,
+      dislikes: (data['dislikes'] as num?)?.toInt() ?? 0,
+      ownerUid: data['userId'] as String?,
     );
   }
 

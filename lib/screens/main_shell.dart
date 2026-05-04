@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../l10n/app_strings.dart';
@@ -80,7 +81,11 @@ class _MainShellState extends State<MainShell> {
             ),
             child: BottomNavigationBar(
               currentIndex: _index,
-              onTap: (i) => setState(() => _index = i),
+              onTap: (i) {
+                FocusManager.instance.primaryFocus?.unfocus();
+                SystemChannels.textInput.invokeMethod<void>('TextInput.hide');
+                setState(() => _index = i);
+              },
               backgroundColor: Colors.transparent,
               elevation: 0,
               selectedItemColor: Colors.white,

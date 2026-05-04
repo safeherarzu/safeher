@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
@@ -357,16 +358,17 @@ out center 80;
     required double lng,
     required String overpassFilter,
     required int radius,
+    int outLimit = 60,
   }) async {
     try {
       final query = '''
-[out:json][timeout:20];
+[out:json][timeout:25];
 (
   node[$overpassFilter](around:$radius,$lat,$lng);
   way[$overpassFilter](around:$radius,$lat,$lng);
   relation[$overpassFilter](around:$radius,$lat,$lng);
 );
-out center 60;
+out center $outLimit;
 ''';
       final res = await http
           .post(
@@ -405,12 +407,14 @@ out center 60;
     required String overpassFilter,
     required int radius,
     required int maxResults,
+    int outLimit = 80,
   }) async {
     final results = await _fetchNearbyPlaces(
       lat: lat,
       lng: lng,
       overpassFilter: overpassFilter,
       radius: radius,
+      outLimit: outLimit,
     );
     if (results.isEmpty) return const [];
 
@@ -436,25 +440,31 @@ out center 60;
     required String overpassFilter,
     required List<int> radii,
     required int maxResults,
+    int outLimit = 100,
   }) async {
+    final seen = <String>{};
+    final merged = <_BusStop>[];
     for (final r in radii) {
-      final results = await _fetchNearbyPlaces(
+      final batch = await _fetchNearbyPlaces(
         lat: lat,
         lng: lng,
         overpassFilter: overpassFilter,
         radius: r,
+        outLimit: outLimit,
       );
-      if (results.isNotEmpty) {
-        final sorted = [...results]
-          ..sort((a, b) {
-            final da = _distanceMeters(lat, lng, a.lat, a.lng);
-            final db = _distanceMeters(lat, lng, b.lat, b.lng);
-            return da.compareTo(db);
-          });
-        return sorted.take(maxResults).toList();
+      for (final p in batch) {
+        final key =
+            '${p.lat.toStringAsFixed(5)}_${p.lng.toStringAsFixed(5)}_${p.name}';
+        if (seen.add(key)) merged.add(p);
       }
     }
-    return const [];
+    if (merged.isEmpty) return const [];
+    merged.sort((a, b) {
+      final da = _distanceMeters(lat, lng, a.lat, a.lng);
+      final db = _distanceMeters(lat, lng, b.lat, b.lng);
+      return da.compareTo(db);
+    });
+    return merged.take(maxResults).toList();
   }
 
   double _distanceMeters(double lat1, double lon1, double lat2, double lon2) {
@@ -472,10 +482,33 @@ out center 60;
 
   double _degToRad(double d) => d * 0.017453292519943295;
 
+  List<_BusStop> _mergeByDistance(
+    double lat,
+    double lng,
+    List<List<_BusStop>> groups,
+    int maxResults,
+  ) {
+    final seen = <String>{};
+    final merged = <_BusStop>[];
+    for (final g in groups) {
+      for (final p in g) {
+        final key =
+            '${p.lat.toStringAsFixed(5)}_${p.lng.toStringAsFixed(5)}_${p.name}';
+        if (seen.add(key)) merged.add(p);
+      }
+    }
+    merged.sort((a, b) {
+      final da = _distanceMeters(lat, lng, a.lat, a.lng);
+      final db = _distanceMeters(lat, lng, b.lat, b.lng);
+      return da.compareTo(db);
+    });
+    return merged.take(maxResults).toList();
+  }
+
   Future<void> _showNearbyHospitals() async {
     if (_isFindingHospitals) return;
     _isFindingHospitals = true;
-    final target = await _resolveTargetForNearby();
+    final target = await _resolveHealthSearchOrigin();
     if (!mounted) return;
     if (target == null) {
       _isFindingHospitals = false;
@@ -487,24 +520,50 @@ out center 60;
       return;
     }
 
+    final lat = target.latitude;
+    final lng = target.longitude;
+
     var hospitals = await _fetchNearestPlacesFast(
-      lat: target.latitude,
-      lng: target.longitude,
+      lat: lat,
+      lng: lng,
       overpassFilter: '"amenity"="hospital"',
-      radius: 12000,
-      maxResults: 8,
+      radius: 10000,
+      maxResults: 10,
+      outLimit: 100,
     );
-    if (hospitals.isEmpty) {
-      hospitals = await _fetchNearestPlacesWithExpansion(
-        lat: target.latitude,
-        lng: target.longitude,
+    var clinics = await _fetchNearestPlacesFast(
+      lat: lat,
+      lng: lng,
+      overpassFilter: '"amenity"="clinic"',
+      radius: 10000,
+      maxResults: 10,
+      outLimit: 80,
+    );
+
+    var combined = _mergeByDistance(lat, lng, [hospitals, clinics], 10);
+
+    if (combined.isEmpty) {
+      final h2 = await _fetchNearestPlacesWithExpansion(
+        lat: lat,
+        lng: lng,
         overpassFilter: '"amenity"="hospital"',
-      radii: const [2500, 5000, 10000, 20000],
-      maxResults: 8,
+        radii: const [4000, 8000, 15000, 30000, 50000],
+        maxResults: 20,
+        outLimit: 120,
       );
+      final c2 = await _fetchNearestPlacesWithExpansion(
+        lat: lat,
+        lng: lng,
+        overpassFilter: '"amenity"="clinic"',
+        radii: const [4000, 8000, 15000, 30000, 50000],
+        maxResults: 20,
+        outLimit: 120,
+      );
+      combined = _mergeByDistance(lat, lng, [h2, c2], 10);
     }
+
     if (!mounted) return;
-    if (hospitals.isEmpty) {
+    if (combined.isEmpty) {
       _isFindingHospitals = false;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Yakında hastane bulunamadı.')),
@@ -517,7 +576,7 @@ out center 60;
         ..._healthMarkers.where(
           (m) => !m.markerId.value.startsWith('hospital_'),
         ),
-        ...hospitals.map(
+        ...combined.map(
           (p) => Marker(
                 markerId: MarkerId('hospital_${p.name}_${p.lat}_${p.lng}'),
                 position: LatLng(p.lat, p.lng),
@@ -530,7 +589,7 @@ out center 60;
         ),
       };
     });
-    final first = hospitals.first;
+    final first = combined.first;
     await _mapController?.animateCamera(
       CameraUpdate.newLatLngZoom(LatLng(first.lat, first.lng), 14),
     );
@@ -540,7 +599,7 @@ out center 60;
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text('${hospitals.length} hastane haritada (en yakınlar) gösteriliyor.'),
+          content: Text('${combined.length} sağlık noktası haritada (en yakına göre) gösteriliyor.'),
         ),
       );
   }
@@ -548,7 +607,7 @@ out center 60;
   Future<void> _showNearbyPharmacies() async {
     if (_isFindingPharmacies) return;
     _isFindingPharmacies = true;
-    final target = await _resolveTargetForNearby();
+    final target = await _resolveHealthSearchOrigin();
     if (!mounted) return;
     if (target == null) {
       _isFindingPharmacies = false;
@@ -560,22 +619,28 @@ out center 60;
       return;
     }
 
+    final lat = target.latitude;
+    final lng = target.longitude;
+
     var pharmacies = await _fetchNearestPlacesFast(
-      lat: target.latitude,
-      lng: target.longitude,
+      lat: lat,
+      lng: lng,
       overpassFilter: '"amenity"="pharmacy"',
       radius: 8000,
-      maxResults: 10,
+      maxResults: 12,
+      outLimit: 100,
     );
     if (pharmacies.isEmpty) {
       pharmacies = await _fetchNearestPlacesWithExpansion(
-        lat: target.latitude,
-        lng: target.longitude,
+        lat: lat,
+        lng: lng,
         overpassFilter: '"amenity"="pharmacy"',
-        radii: const [1800, 4000, 8000, 15000],
-        maxResults: 10,
+        radii: const [2500, 5000, 10000, 20000, 40000],
+        maxResults: 20,
+        outLimit: 120,
       );
     }
+    pharmacies = _mergeByDistance(lat, lng, [pharmacies], 12);
     if (!mounted) return;
     if (pharmacies.isEmpty) {
       _isFindingPharmacies = false;
@@ -641,6 +706,14 @@ out center 60;
     final pos = await _tryGetCurrentPosition();
     if (pos == null) return null;
     return LatLng(pos.latitude, pos.longitude);
+  }
+
+  /// Hastane / eczane için önce **GPS**; yoksa harita merkezi (arama sonrası yanlış “yakın” olmasın).
+  Future<LatLng?> _resolveHealthSearchOrigin() async {
+    final pos = await _tryGetCurrentPosition();
+    if (pos != null) return LatLng(pos.latitude, pos.longitude);
+    if (_mapContextTarget != null) return _mapContextTarget;
+    return null;
   }
 
   Future<void> _showTaxiPicker(double lat, double lng) async {
@@ -948,6 +1021,7 @@ out center 60;
                                 tags: selectedTags.toList(),
                                 likes: 0,
                                 dislikes: 0,
+                                ownerUid: FirebaseAuth.instance.currentUser?.uid,
                               );
                               if (mounted) {
                                 setState(() => _offlinePins.add(localPin));
@@ -1001,17 +1075,19 @@ out center 60;
   }
 
   Future<void> _showPinDetails(SafetyPin pin) async {
-    // Bottom sheet UI, senin örnekteki stile benzer şekilde: etiketler + like/dislike + sil.
     if (!context.mounted) return;
 
     int likes = pin.likes;
     int dislikes = pin.dislikes;
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final canDelete =
+        _isOfflinePin(pin) || (uid != null && pin.ownerUid != null && pin.ownerUid == uid);
 
     await showModalBottomSheet<void>(
       context: context,
-      builder: (context) {
+      builder: (sheetContext) {
         return StatefulBuilder(
-          builder: (context, setState) {
+          builder: (context, setModalState) {
             final isSafe = pin.isSafe;
 
             return Padding(
@@ -1067,11 +1143,11 @@ out center 60;
                         icon: const Icon(Icons.thumb_up, color: Colors.green),
                         onPressed: () async {
                           if (_isOfflinePin(pin)) {
-                            setState(() => likes += 1);
+                            setModalState(() => likes += 1);
                             return;
                           }
                           await _pinsRepository.likePin(pin.id);
-                          setState(() => likes += 1);
+                          setModalState(() => likes += 1);
                         },
                       ),
                       Text('$likes'),
@@ -1080,11 +1156,11 @@ out center 60;
                         icon: const Icon(Icons.thumb_down, color: Colors.red),
                         onPressed: () async {
                           if (_isOfflinePin(pin)) {
-                            setState(() => dislikes += 1);
+                            setModalState(() => dislikes += 1);
                             return;
                           }
                           await _pinsRepository.dislikePin(pin.id);
-                          setState(() => dislikes += 1);
+                          setModalState(() => dislikes += 1);
                         },
                       ),
                       Text('$dislikes'),
@@ -1100,26 +1176,50 @@ out center 60;
                     style: const TextStyle(color: Colors.red),
                   ),
                   const SizedBox(height: 16),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      onPressed: () async {
-                        if (_isOfflinePin(pin)) {
-                          setState(() {
-                            _offlinePins.removeWhere((p) => p.id == pin.id);
-                          });
-                          if (!context.mounted) return;
-                          Navigator.pop(context);
-                          return;
-                        }
-                        await _pinsRepository.deletePin(pin.id);
-                        if (!context.mounted) return;
-                        Navigator.pop(context);
-                      },
-                      child: const Text('Sil'),
+                  if (canDelete)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: ElevatedButton(
+                        style:
+                            ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                        onPressed: () async {
+                          if (_isOfflinePin(pin)) {
+                            Navigator.pop(sheetContext);
+                            if (mounted) {
+                              setState(() {
+                                _offlinePins.removeWhere((p) => p.id == pin.id);
+                              });
+                            }
+                            return;
+                          }
+                          try {
+                            await _pinsRepository.deletePin(pin.id);
+                            if (!sheetContext.mounted) return;
+                            Navigator.pop(sheetContext);
+                            if (mounted) setState(() {});
+                          } catch (e) {
+                            if (!sheetContext.mounted) return;
+                            ScaffoldMessenger.of(sheetContext).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Silinemedi. Sadece kendi eklediğin işaretleri '
+                                  'silebilirsin. ($e)',
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                        child: const Text('Sil'),
+                      ),
+                    )
+                  else
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Bu işareti yalnızca ekleyen kullanıcı silebilir.',
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                      ),
                     ),
-                  ),
                 ],
               ),
             );
