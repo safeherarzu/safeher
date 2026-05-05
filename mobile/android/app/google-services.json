@@ -1,0 +1,86 @@
+{
+  "project_info": {
+    "project_number": "506037878629",
+    "project_id": "safeher-66333",
+    "storage_bucket": "safeher-66333.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:506037878629:android:558bed3384e75cdce7eb8c",
+        "android_client_info": {
+          "package_name": "com.example.safeher"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyACex1qOjAuRR9t8ubCz6lwgDpNPhhzT1I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:506037878629:android:76fdadf4c461045de7eb8c",
+        "android_client_info": {
+          "package_name": "com.safeher.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyACex1qOjAuRR9t8ubCz6lwgDpNPhhzT1I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:506037878629:android:6778f1299719e75de7eb8c",
+        "android_client_info": {
+          "package_name": "com.safeher.safeher"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyACex1qOjAuRR9t8ubCz6lwgDpNPhhzT1I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:506037878629:android:daa9745968e41ec3e7eb8c",
+        "android_client_info": {
+          "package_name": "com.safeher.womensafety"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyACex1qOjAuRR9t8ubCz6lwgDpNPhhzT1I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
