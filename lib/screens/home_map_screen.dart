@@ -41,6 +41,26 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     'Issız',
   ];
 
+  static const _overpassInterpreterUrls = <String>[
+    'https://overpass-api.de/api/interpreter',
+    'https://lz4.overpass-api.de/api/interpreter',
+    'https://z.overpass-api.de/api/interpreter',
+  ];
+
+  static const Duration _overpassHttpTimeout = Duration(seconds: 45);
+
+  Future<http.Response?> _postOverpass(String query) async {
+    for (final url in _overpassInterpreterUrls) {
+      try {
+        final res = await http
+            .post(Uri.parse(url), body: {'data': query})
+            .timeout(_overpassHttpTimeout);
+        if (res.statusCode == 200) return res;
+      } catch (_) {}
+    }
+    return null;
+  }
+
   final TextEditingController _searchController = TextEditingController();
   GoogleMapController? _mapController;
   LatLng? _pendingCameraTarget;
@@ -54,6 +74,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   bool _isFindingHospitals = false;
   bool _isFindingPharmacies = false;
   bool _didAutoCenterOnLaunch = false;
+  static const double _streetFocusZoom = 17;
 
   @override
   void initState() {
@@ -96,7 +117,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
           _pendingCameraTarget = target;
         } else {
           await _mapController!.animateCamera(
-            CameraUpdate.newLatLngZoom(target, 14),
+            CameraUpdate.newLatLngZoom(target, _streetFocusZoom),
           );
         }
       }
@@ -116,7 +137,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       _mapContextTarget = target;
       if (_mapController != null) {
         await _mapController!.animateCamera(
-          CameraUpdate.newLatLngZoom(target, 14),
+          CameraUpdate.newLatLngZoom(target, _streetFocusZoom),
         );
       } else {
         _pendingCameraTarget = target;
@@ -291,7 +312,9 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
           infoWindow: InfoWindow(
             title: stop.name.isEmpty ? 'Otobüs Durağı' : stop.name,
-            snippet: 'Yakındaki durak',
+            snippet: stop.routes.isEmpty
+                ? 'Yakındaki durak'
+                : 'Hatlar: ${stop.routes.join(', ')}',
           ),
         );
       }).toSet();
@@ -321,14 +344,12 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   node["amenity"="bus_station"](around:2500,$lat,$lng);
   way["amenity"="bus_station"](around:2500,$lat,$lng);
   relation["amenity"="bus_station"](around:2500,$lat,$lng);
+  node["public_transport"="stop_position"](around:1200,$lat,$lng);
 );
 out center 80;
 ''';
-      final res = await http.post(
-        Uri.parse('https://overpass-api.de/api/interpreter'),
-        body: {'data': query},
-      );
-      if (res.statusCode != 200) return const [];
+      final res = await _postOverpass(query);
+      if (res == null) return const [];
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final elements = (map['elements'] as List<dynamic>? ?? const []);
       return elements
@@ -344,6 +365,7 @@ out center 80;
                   (center?['lon'] as num?)?.toDouble() ??
                   0),
               name: (tags['name'] as String?) ?? '',
+              routes: _extractBusRoutes(tags),
             );
           })
           .where((e) => e.lat != 0 && e.lng != 0)
@@ -351,6 +373,26 @@ out center 80;
     } catch (_) {
       return const [];
     }
+  }
+
+  List<String> _extractBusRoutes(Map<String, dynamic> tags) {
+    final raw = [
+      tags['route_ref'],
+      tags['ref'],
+      tags['local_ref'],
+      tags['bus_routes'],
+      tags['routes'],
+    ].whereType<String>().join(';');
+    if (raw.trim().isEmpty) return const [];
+
+    final routes = raw
+        .split(RegExp(r'[,;/| ]+'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    return routes.take(8).toList();
   }
 
   Future<List<_BusStop>> _fetchNearbyPlaces({
@@ -370,13 +412,8 @@ out center 80;
 );
 out center $outLimit;
 ''';
-      final res = await http
-          .post(
-            Uri.parse('https://overpass-api.de/api/interpreter'),
-            body: {'data': query},
-          )
-          .timeout(const Duration(seconds: 8));
-      if (res.statusCode != 200) return const [];
+      final res = await _postOverpass(query);
+      if (res == null) return const [];
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final elements = (map['elements'] as List<dynamic>? ?? const []);
       return elements
@@ -523,43 +560,79 @@ out center $outLimit;
     final lat = target.latitude;
     final lng = target.longitude;
 
-    var hospitals = await _fetchNearestPlacesFast(
-      lat: lat,
-      lng: lng,
-      overpassFilter: '"amenity"="hospital"',
-      radius: 10000,
-      maxResults: 10,
-      outLimit: 100,
-    );
-    var clinics = await _fetchNearestPlacesFast(
-      lat: lat,
-      lng: lng,
-      overpassFilter: '"amenity"="clinic"',
-      radius: 10000,
-      maxResults: 10,
-      outLimit: 80,
-    );
-
-    var combined = _mergeByDistance(lat, lng, [hospitals, clinics], 10);
-
-    if (combined.isEmpty) {
-      final h2 = await _fetchNearestPlacesWithExpansion(
+    final hospitalLists = await Future.wait([
+      _fetchNearestPlacesFast(
         lat: lat,
         lng: lng,
         overpassFilter: '"amenity"="hospital"',
-        radii: const [4000, 8000, 15000, 30000, 50000],
-        maxResults: 20,
-        outLimit: 120,
-      );
-      final c2 = await _fetchNearestPlacesWithExpansion(
+        radius: 10000,
+        maxResults: 10,
+        outLimit: 100,
+      ),
+      _fetchNearestPlacesFast(
         lat: lat,
         lng: lng,
         overpassFilter: '"amenity"="clinic"',
-        radii: const [4000, 8000, 15000, 30000, 50000],
-        maxResults: 20,
-        outLimit: 120,
-      );
-      combined = _mergeByDistance(lat, lng, [h2, c2], 10);
+        radius: 10000,
+        maxResults: 10,
+        outLimit: 80,
+      ),
+      _fetchNearestPlacesFast(
+        lat: lat,
+        lng: lng,
+        overpassFilter: '"healthcare"="hospital"',
+        radius: 10000,
+        maxResults: 10,
+        outLimit: 80,
+      ),
+      _fetchNearestPlacesFast(
+        lat: lat,
+        lng: lng,
+        overpassFilter: '"healthcare"="clinic"',
+        radius: 10000,
+        maxResults: 10,
+        outLimit: 80,
+      ),
+    ]);
+
+    var combined = _mergeByDistance(lat, lng, hospitalLists, 10);
+
+    if (combined.isEmpty) {
+      final expanded = await Future.wait([
+        _fetchNearestPlacesWithExpansion(
+          lat: lat,
+          lng: lng,
+          overpassFilter: '"amenity"="hospital"',
+          radii: const [4000, 8000, 15000, 30000, 50000],
+          maxResults: 20,
+          outLimit: 120,
+        ),
+        _fetchNearestPlacesWithExpansion(
+          lat: lat,
+          lng: lng,
+          overpassFilter: '"amenity"="clinic"',
+          radii: const [4000, 8000, 15000, 30000, 50000],
+          maxResults: 20,
+          outLimit: 120,
+        ),
+        _fetchNearestPlacesWithExpansion(
+          lat: lat,
+          lng: lng,
+          overpassFilter: '"healthcare"="hospital"',
+          radii: const [4000, 8000, 15000, 30000, 50000],
+          maxResults: 20,
+          outLimit: 120,
+        ),
+        _fetchNearestPlacesWithExpansion(
+          lat: lat,
+          lng: lng,
+          overpassFilter: '"healthcare"="clinic"',
+          radii: const [4000, 8000, 15000, 30000, 50000],
+          maxResults: 20,
+          outLimit: 120,
+        ),
+      ]);
+      combined = _mergeByDistance(lat, lng, expanded, 10);
     }
 
     if (!mounted) return;
@@ -841,7 +914,7 @@ out center $outLimit;
       _pendingCameraTarget = null;
       _mapContextTarget = target;
       controller.animateCamera(
-        CameraUpdate.newLatLngZoom(target, 14),
+        CameraUpdate.newLatLngZoom(target, _streetFocusZoom),
       );
     }
     _tryAutoCenterAfterMapReady();
@@ -1405,11 +1478,13 @@ class _BusStop {
   final double lat;
   final double lng;
   final String name;
+  final List<String> routes;
 
   const _BusStop({
     required this.lat,
     required this.lng,
     required this.name,
+    this.routes = const [],
   });
 }
 
