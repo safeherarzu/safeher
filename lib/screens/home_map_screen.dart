@@ -53,7 +53,14 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     for (final url in _overpassInterpreterUrls) {
       try {
         final res = await http
-            .post(Uri.parse(url), body: {'data': query})
+            .post(
+              Uri.parse(url),
+              headers: const {
+                'Accept': 'application/json',
+                'User-Agent': 'SafeHer/1.0 (support: arzu@safeherapp.com)',
+              },
+              body: {'data': query},
+            )
             .timeout(_overpassHttpTimeout);
         if (res.statusCode == 200) return res;
       } catch (_) {}
@@ -335,16 +342,16 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       final query = '''
 [out:json][timeout:20];
 (
-  node["highway"="bus_stop"](around:1200,$lat,$lng);
-  way["highway"="bus_stop"](around:1200,$lat,$lng);
-  relation["highway"="bus_stop"](around:1200,$lat,$lng);
-  node["public_transport"="platform"](around:1200,$lat,$lng);
-  way["public_transport"="platform"](around:1200,$lat,$lng);
-  relation["public_transport"="platform"](around:1200,$lat,$lng);
-  node["amenity"="bus_station"](around:2500,$lat,$lng);
-  way["amenity"="bus_station"](around:2500,$lat,$lng);
-  relation["amenity"="bus_station"](around:2500,$lat,$lng);
-  node["public_transport"="stop_position"](around:1200,$lat,$lng);
+  node["highway"="bus_stop"](around:2500,$lat,$lng);
+  way["highway"="bus_stop"](around:2500,$lat,$lng);
+  relation["highway"="bus_stop"](around:2500,$lat,$lng);
+  node["public_transport"="platform"](around:2500,$lat,$lng);
+  way["public_transport"="platform"](around:2500,$lat,$lng);
+  relation["public_transport"="platform"](around:2500,$lat,$lng);
+  node["amenity"="bus_station"](around:3500,$lat,$lng);
+  way["amenity"="bus_station"](around:3500,$lat,$lng);
+  relation["amenity"="bus_station"](around:3500,$lat,$lng);
+  node["public_transport"="stop_position"](around:2500,$lat,$lng);
 );
 out center 80;
 ''';
@@ -395,6 +402,26 @@ out center 80;
     return routes.take(8).toList();
   }
 
+  List<_BusStop> _placesFromOverpassElements(List<dynamic> elements) {
+    return elements
+        .map((e) {
+          final m = e as Map<String, dynamic>;
+          final tags = (m['tags'] as Map<String, dynamic>? ?? const {});
+          final center = m['center'] as Map<String, dynamic>?;
+          return _BusStop(
+            lat: ((m['lat'] as num?)?.toDouble() ??
+                (center?['lat'] as num?)?.toDouble() ??
+                0),
+            lng: ((m['lon'] as num?)?.toDouble() ??
+                (center?['lon'] as num?)?.toDouble() ??
+                0),
+            name: (tags['name'] as String?) ?? '',
+          );
+        })
+        .where((e) => e.lat != 0 && e.lng != 0)
+        .toList();
+  }
+
   Future<List<_BusStop>> _fetchNearbyPlaces({
     required double lat,
     required double lng,
@@ -416,23 +443,42 @@ out center $outLimit;
       if (res == null) return const [];
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final elements = (map['elements'] as List<dynamic>? ?? const []);
-      return elements
-          .map((e) {
-            final m = e as Map<String, dynamic>;
-            final tags = (m['tags'] as Map<String, dynamic>? ?? const {});
-            final center = m['center'] as Map<String, dynamic>?;
-            return _BusStop(
-              lat: ((m['lat'] as num?)?.toDouble() ??
-                  (center?['lat'] as num?)?.toDouble() ??
-                  0),
-              lng: ((m['lon'] as num?)?.toDouble() ??
-                  (center?['lon'] as num?)?.toDouble() ??
-                  0),
-              name: (tags['name'] as String?) ?? '',
-            );
-          })
-          .where((e) => e.lat != 0 && e.lng != 0)
-          .toList();
+      return _placesFromOverpassElements(elements);
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<List<_BusStop>> _fetchNearbyPlacesAny({
+    required double lat,
+    required double lng,
+    required List<String> filters,
+    required int radius,
+    int outLimit = 60,
+    bool nodesOnly = false,
+  }) async {
+    try {
+      final selectors = filters
+          .expand((filter) => nodesOnly
+              ? ['  node[$filter](around:$radius,$lat,$lng);']
+              : [
+                  '  node[$filter](around:$radius,$lat,$lng);',
+                  '  way[$filter](around:$radius,$lat,$lng);',
+                  '  relation[$filter](around:$radius,$lat,$lng);',
+                ])
+          .join('\n');
+      final query = '''
+[out:json][timeout:25];
+(
+$selectors
+);
+out center $outLimit;
+''';
+      final res = await _postOverpass(query);
+      if (res == null) return const [];
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      final elements = (map['elements'] as List<dynamic>? ?? const []);
+      return _placesFromOverpassElements(elements);
     } catch (_) {
       return const [];
     }
@@ -469,39 +515,6 @@ out center $outLimit;
       return da.compareTo(db);
     });
     return deduped.take(maxResults).toList();
-  }
-
-  Future<List<_BusStop>> _fetchNearestPlacesWithExpansion({
-    required double lat,
-    required double lng,
-    required String overpassFilter,
-    required List<int> radii,
-    required int maxResults,
-    int outLimit = 100,
-  }) async {
-    final seen = <String>{};
-    final merged = <_BusStop>[];
-    for (final r in radii) {
-      final batch = await _fetchNearbyPlaces(
-        lat: lat,
-        lng: lng,
-        overpassFilter: overpassFilter,
-        radius: r,
-        outLimit: outLimit,
-      );
-      for (final p in batch) {
-        final key =
-            '${p.lat.toStringAsFixed(5)}_${p.lng.toStringAsFixed(5)}_${p.name}';
-        if (seen.add(key)) merged.add(p);
-      }
-    }
-    if (merged.isEmpty) return const [];
-    merged.sort((a, b) {
-      final da = _distanceMeters(lat, lng, a.lat, a.lng);
-      final db = _distanceMeters(lat, lng, b.lat, b.lng);
-      return da.compareTo(db);
-    });
-    return merged.take(maxResults).toList();
   }
 
   double _distanceMeters(double lat1, double lon1, double lat2, double lon2) {
@@ -545,7 +558,7 @@ out center $outLimit;
   Future<void> _showNearbyHospitals() async {
     if (_isFindingHospitals) return;
     _isFindingHospitals = true;
-    final target = await _resolveHealthSearchOrigin();
+    final target = await _resolveTargetForNearby();
     if (!mounted) return;
     if (target == null) {
       _isFindingHospitals = false;
@@ -560,80 +573,20 @@ out center $outLimit;
     final lat = target.latitude;
     final lng = target.longitude;
 
-    final hospitalLists = await Future.wait([
-      _fetchNearestPlacesFast(
-        lat: lat,
-        lng: lng,
-        overpassFilter: '"amenity"="hospital"',
-        radius: 10000,
-        maxResults: 10,
-        outLimit: 100,
-      ),
-      _fetchNearestPlacesFast(
-        lat: lat,
-        lng: lng,
-        overpassFilter: '"amenity"="clinic"',
-        radius: 10000,
-        maxResults: 10,
-        outLimit: 80,
-      ),
-      _fetchNearestPlacesFast(
-        lat: lat,
-        lng: lng,
-        overpassFilter: '"healthcare"="hospital"',
-        radius: 10000,
-        maxResults: 10,
-        outLimit: 80,
-      ),
-      _fetchNearestPlacesFast(
-        lat: lat,
-        lng: lng,
-        overpassFilter: '"healthcare"="clinic"',
-        radius: 10000,
-        maxResults: 10,
-        outLimit: 80,
-      ),
-    ]);
-
-    var combined = _mergeByDistance(lat, lng, hospitalLists, 10);
-
-    if (combined.isEmpty) {
-      final expanded = await Future.wait([
-        _fetchNearestPlacesWithExpansion(
-          lat: lat,
-          lng: lng,
-          overpassFilter: '"amenity"="hospital"',
-          radii: const [4000, 8000, 15000, 30000, 50000],
-          maxResults: 20,
-          outLimit: 120,
-        ),
-        _fetchNearestPlacesWithExpansion(
-          lat: lat,
-          lng: lng,
-          overpassFilter: '"amenity"="clinic"',
-          radii: const [4000, 8000, 15000, 30000, 50000],
-          maxResults: 20,
-          outLimit: 120,
-        ),
-        _fetchNearestPlacesWithExpansion(
-          lat: lat,
-          lng: lng,
-          overpassFilter: '"healthcare"="hospital"',
-          radii: const [4000, 8000, 15000, 30000, 50000],
-          maxResults: 20,
-          outLimit: 120,
-        ),
-        _fetchNearestPlacesWithExpansion(
-          lat: lat,
-          lng: lng,
-          overpassFilter: '"healthcare"="clinic"',
-          radii: const [4000, 8000, 15000, 30000, 50000],
-          maxResults: 20,
-          outLimit: 120,
-        ),
-      ]);
-      combined = _mergeByDistance(lat, lng, expanded, 10);
-    }
+    final health = await _fetchNearbyPlacesAny(
+      lat: lat,
+      lng: lng,
+      filters: const [
+        '"amenity"="hospital"',
+        '"amenity"="clinic"',
+        '"healthcare"="hospital"',
+        '"healthcare"="clinic"',
+      ],
+      radius: 50000,
+      outLimit: 40,
+      nodesOnly: true,
+    );
+    final combined = _mergeByDistance(lat, lng, [health], 10);
 
     if (!mounted) return;
     if (combined.isEmpty) {
@@ -680,7 +633,7 @@ out center $outLimit;
   Future<void> _showNearbyPharmacies() async {
     if (_isFindingPharmacies) return;
     _isFindingPharmacies = true;
-    final target = await _resolveHealthSearchOrigin();
+    final target = await _resolveTargetForNearby();
     if (!mounted) return;
     if (target == null) {
       _isFindingPharmacies = false;
@@ -704,12 +657,11 @@ out center $outLimit;
       outLimit: 100,
     );
     if (pharmacies.isEmpty) {
-      pharmacies = await _fetchNearestPlacesWithExpansion(
+      pharmacies = await _fetchNearbyPlacesAny(
         lat: lat,
         lng: lng,
-        overpassFilter: '"amenity"="pharmacy"',
-        radii: const [2500, 5000, 10000, 20000, 40000],
-        maxResults: 20,
+        filters: const ['"amenity"="pharmacy"'],
+        radius: 40000,
         outLimit: 120,
       );
     }
@@ -779,14 +731,6 @@ out center $outLimit;
     final pos = await _tryGetCurrentPosition();
     if (pos == null) return null;
     return LatLng(pos.latitude, pos.longitude);
-  }
-
-  /// Hastane / eczane için önce **GPS**; yoksa harita merkezi (arama sonrası yanlış “yakın” olmasın).
-  Future<LatLng?> _resolveHealthSearchOrigin() async {
-    final pos = await _tryGetCurrentPosition();
-    if (pos != null) return LatLng(pos.latitude, pos.longitude);
-    if (_mapContextTarget != null) return _mapContextTarget;
-    return null;
   }
 
   Future<void> _showTaxiPicker(double lat, double lng) async {

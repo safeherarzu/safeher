@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android signing secrets must stay local.
+*.jks
+*.keystore
+/android/key.properties
+/android/signing/
