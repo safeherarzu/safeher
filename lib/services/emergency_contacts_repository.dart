@@ -42,6 +42,11 @@ class EmergencyContactsRepository {
     p.setString(_key, jsonEncode(next));
   }
 
+  Future<void> clear() async {
+    final p = await _getPrefs();
+    await p.remove(_key);
+  }
+
   /// WhatsApp `wa.me/<phone>` formatı için sadece rakam bırakır.
   static String normalizePhone(String input) {
     final digitsOnly = input.replaceAll(RegExp(r'[^0-9]'), '');

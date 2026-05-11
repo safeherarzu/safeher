@@ -48,8 +48,8 @@
 	<key>GMSApiKey</key>
 	<string>AIzaSyAP_Q0NbvJ0jkhxmZ1ys06rDwsxkdMyIsY</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Konumunuz, haritada güvenlik pinleri ve SOS konum paylaşımı için kullanılır.</string>
+	<string>Konumunuz; yakındaki güvenlik işaretlerini, durak/hastane/eczane noktalarını göstermek ve SOS sırasında konum bağlantısı oluşturmak için yalnızca uygulamayı kullanırken alınır.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Konumunuz, haritada güvenlik pinleri ve SOS konum paylaşımı için kullanılır.</string>
+	<string>Konumunuz, uygulama açıkken güvenlik haritası ve SOS konum paylaşımı özellikleri için kullanılır.</string>
 </dict>
 </plist>

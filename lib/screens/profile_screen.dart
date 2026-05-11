@@ -20,6 +20,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   List<String> _contacts = const [];
   bool _contactsLoading = true;
+  bool _deletingAccount = false;
 
   @override
   void initState() {
@@ -34,6 +35,138 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _contacts = contacts;
       _contactsLoading = false;
     });
+  }
+
+  Future<void> _deleteUserOwnedDocs(String uid) async {
+    final firestore = FirebaseFirestore.instance;
+    final collections = <String>['users', 'emergency_contacts', 'sos_logs', 'locations'];
+
+    for (final collection in collections) {
+      final query = collection == 'users'
+          ? await firestore
+              .collection(collection)
+              .where(FieldPath.documentId, isEqualTo: uid)
+              .limit(1)
+              .get()
+          : await firestore
+              .collection(collection)
+              .where('userId', isEqualTo: uid)
+              .limit(100)
+              .get();
+
+      if (query.docs.isEmpty) continue;
+      final batch = firestore.batch();
+      for (final doc in query.docs) {
+        batch.delete(doc.reference);
+      }
+      await batch.commit();
+    }
+  }
+
+  Future<String?> _askDeletePassword(BuildContext context, String email) async {
+    final controller = TextEditingController();
+    try {
+      return showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          return AlertDialog(
+            title: const Text('Hesabı Sil'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$email hesabını kalıcı olarak silmek üzeresin. Bu işlem geri alınamaz.',
+                ),
+                const SizedBox(height: 12),
+                const Text('Devam etmek için şifreni gir:'),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Şifre',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Vazgeç'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                onPressed: () =>
+                    Navigator.of(dialogContext).pop(controller.text),
+                child: const Text('Hesabımı Sil'),
+              ),
+            ],
+          );
+        },
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Future<void> _deleteAccount(BuildContext context) async {
+    if (_deletingAccount) return;
+    final user = FirebaseAuth.instance.currentUser;
+    final email = user?.email;
+    if (user == null || email == null || email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Silinecek hesap bulunamadı.')),
+      );
+      return;
+    }
+
+    final password = await _askDeletePassword(context, email);
+    if (!context.mounted || password == null) return;
+    if (password.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Hesabı silmek için şifre gerekli.')),
+      );
+      return;
+    }
+
+    setState(() => _deletingAccount = true);
+    try {
+      final credential = EmailAuthProvider.credential(
+        email: email,
+        password: password,
+      );
+      await user.reauthenticateWithCredential(credential);
+      await _deleteUserOwnedDocs(user.uid);
+      await _contactsRepo.clear();
+      await user.delete();
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Hesabın silindi.')),
+      );
+    } on FirebaseAuthException catch (e) {
+      if (!context.mounted) return;
+      final message = switch (e.code) {
+        'wrong-password' || 'invalid-credential' => 'Şifre hatalı.',
+        'requires-recent-login' =>
+          'Güvenlik için lütfen çıkış yapıp tekrar giriş yaptıktan sonra hesabını sil.',
+        _ => 'Hesap silme hatası: ${e.message ?? e.code}',
+      };
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Hesap silme hatası: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _deletingAccount = false);
+    }
   }
 
   Widget _statCard({
@@ -222,6 +355,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   MaterialPageRoute(builder: (_) => const SettingsMenuScreen()),
                 );
               },
+            ),
+          ),
+          const SizedBox(height: 14),
+          Card(
+            child: ListTile(
+              enabled: !_deletingAccount,
+              leading: _deletingAccount
+                  ? const SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.delete_forever, color: Colors.redAccent),
+              title: const Text(
+                'Hesabı Sil',
+                style: TextStyle(
+                  color: Colors.redAccent,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              subtitle: Text(
+                'Hesabını ve hesapla ilişkili temel verileri kalıcı olarak sil',
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.82)),
+              ),
+              trailing: const Icon(Icons.chevron_right, color: Colors.redAccent),
+              onTap: _deletingAccount ? null : () => _deleteAccount(context),
             ),
           ),
         ],

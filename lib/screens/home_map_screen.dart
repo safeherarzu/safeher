@@ -1193,6 +1193,19 @@ out center $outLimit;
                     style: const TextStyle(color: Colors.red),
                   ),
                   const SizedBox(height: 16),
+                  if (!_isOfflinePin(pin))
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.pop(sheetContext);
+                          _reportPin(pin);
+                        },
+                        icon: const Icon(Icons.flag_outlined),
+                        label: const Text('İşareti Şikayet Et'),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
                   if (canDelete)
                     Align(
                       alignment: Alignment.centerLeft,
@@ -1244,6 +1257,59 @@ out center $outLimit;
         );
       },
     );
+  }
+
+  Future<void> _reportPin(SafetyPin pin) async {
+    if (_isOfflinePin(pin)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Yerel işaretler şikayet edilemez.')),
+      );
+      return;
+    }
+
+    const reasons = <String>[
+      'Yanlış konum',
+      'Uygunsuz/yanıltıcı işaret',
+      'Tekrarlanan işaret',
+      'Diğer',
+    ];
+
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return SimpleDialog(
+          title: const Text('İşareti Şikayet Et'),
+          children: [
+            for (final reason in reasons)
+              SimpleDialogOption(
+                onPressed: () => Navigator.of(dialogContext).pop(reason),
+                child: Text(reason),
+              ),
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Vazgeç'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (reason == null || !mounted) return;
+
+    try {
+      await _pinsRepository.reportPin(pinId: pin.id, reason: reason);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Şikayet alındı. Moderasyon ekibi inceleyecek.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Şikayet gönderilemedi: $e')),
+      );
+    }
   }
 
   @override
