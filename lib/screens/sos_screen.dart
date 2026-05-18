@@ -2,16 +2,21 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../l10n/app_strings.dart';
 import '../services/emergency_contacts_repository.dart';
 import '../theme/app_theme.dart';
 
 class SosScreen extends StatefulWidget {
-  const SosScreen({super.key});
+  const SosScreen({super.key, this.visible = true});
+
+  /// SOS sekmesi görünür değilken alarm çalmamalı (IndexedStack sekmeleri dispose etmez).
+  final bool visible;
 
   @override
   State<SosScreen> createState() => _SosScreenState();
@@ -44,6 +49,22 @@ class _SosScreenState extends State<SosScreen> {
     super.initState();
     _reloadContacts();
     _loadAlarmSettings();
+  }
+
+  @override
+  void didUpdateWidget(covariant SosScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.visible && !widget.visible) {
+      _alarmStopTimer?.cancel();
+      _alarmStopTimer = null;
+      _holdTimer?.cancel();
+      _holdTimer = null;
+      _holdCountdownTimer?.cancel();
+      _holdCountdownTimer = null;
+      _holding = false;
+      _holdSecondsLeft = 2;
+      FlutterRingtonePlayer().stop();
+    }
   }
 
   @override
@@ -103,22 +124,90 @@ class _SosScreenState extends State<SosScreen> {
     await _reloadContacts();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Acil kişi eklendi')),
+      SnackBar(content: Text(context.t('sosContactAdded'))),
     );
   }
 
+  Future<void> _pickFromContacts() async {
+    if (!mounted) return;
+    try {
+      final granted =
+          await FlutterContacts.requestPermission(readonly: true);
+      if (!granted) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.t('sosContactsPermissionNeeded'))),
+        );
+        return;
+      }
+
+      final contact = await FlutterContacts.openExternalPick();
+      if (!mounted) return;
+      if (contact == null) return;
+
+      String? raw;
+      for (final p in contact.phones) {
+        final n = p.number.trim();
+        if (n.isNotEmpty) {
+          raw = n;
+          break;
+        }
+      }
+      if (raw == null || raw.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.t('sosContactNoPhone'))),
+        );
+        return;
+      }
+
+      final normalized = EmergencyContactsRepository.normalizePhone(raw);
+      if (normalized.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.t('sosNumberUnreadable'))),
+        );
+        return;
+      }
+
+      await _contactsRepo.add(normalized);
+      await _reloadContacts();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            context.tReplace('sosAddedFromContacts', {'phone': normalized}),
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            context.tReplace('sosContactBookError', {'error': '$e'}),
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _sendWhatsAppWithLocation() async {
+    if (!widget.visible) {
+      _stopSosAlarm();
+      return;
+    }
     if (_sending) return;
     if (_contacts.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Önce acil kişileri ekleyin.')),
+        SnackBar(content: Text(context.t('sosAddContactsFirst'))),
       );
       return;
     }
 
     setState(() => _sending = true);
-    _playSosAlarm();
+    if (widget.visible) {
+      _playSosAlarm();
+    }
     try {
       final permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
@@ -127,7 +216,7 @@ class _SosScreenState extends State<SosScreen> {
             requested == LocationPermission.deniedForever) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Konum izni verilmedi.')),
+            SnackBar(content: Text(context.t('sosLocationDenied'))),
           );
           return;
         }
@@ -142,8 +231,8 @@ class _SosScreenState extends State<SosScreen> {
       final lat = pos.latitude;
       final lng = pos.longitude;
       final mapsLink = 'https://maps.google.com/?q=$lat,$lng';
-      final message =
-          '🚨 SOS! Acil durum.\nKonumum: $mapsLink\nYardımınıza ihtiyacım var.';
+      if (!mounted) return;
+      final message = context.tReplace('sosWhatsAppBody', {'url': mapsLink});
 
       for (final phone in _contacts) {
         final url = Uri.parse(
@@ -154,12 +243,16 @@ class _SosScreenState extends State<SosScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('WhatsApp’a konum gönderildi.')),
+        SnackBar(content: Text(context.t('sosWhatsAppSent'))),
       );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('SOS gönderme hatası: $e')),
+        SnackBar(
+          content: Text(
+            context.tReplace('sosSendError', {'error': '$e'}),
+          ),
+        ),
       );
     } finally {
       _stopSosAlarm();
@@ -168,6 +261,7 @@ class _SosScreenState extends State<SosScreen> {
   }
 
   void _playSosAlarm() {
+    if (!widget.visible) return;
     _alarmStopTimer?.cancel();
     try {
       FlutterRingtonePlayer().playAlarm(
@@ -176,7 +270,6 @@ class _SosScreenState extends State<SosScreen> {
         volume: 1,
       );
     } catch (_) {
-      // Fallback for devices that block alarm stream playback.
       FlutterRingtonePlayer().play(
         android: AndroidSounds.alarm,
         ios: IosSounds.alarm,
@@ -195,6 +288,7 @@ class _SosScreenState extends State<SosScreen> {
   }
 
   void _startHold() {
+    if (!widget.visible) return;
     _holdTriggered = false;
     _holdTimer?.cancel();
     _holdCountdownTimer?.cancel();
@@ -230,7 +324,7 @@ class _SosScreenState extends State<SosScreen> {
     _holdSecondsLeft = 2;
     if (showHint && !_holdTriggered && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Lütfen 2 saniye basılı tutun.')),
+        SnackBar(content: Text(context.t('sosHoldTwoSeconds'))),
       );
     }
   }
@@ -244,7 +338,7 @@ class _SosScreenState extends State<SosScreen> {
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         children: [
           Text(
-            'SOS',
+            context.t('sosTitle'),
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                   fontWeight: FontWeight.bold,
                   color: Colors.white,
@@ -252,7 +346,7 @@ class _SosScreenState extends State<SosScreen> {
           ),
           const SizedBox(height: 10),
           Text(
-            'Acil kişilerinize konumunuza ek olarak WhatsApp’tan mesaj gönderir.',
+            context.t('sosScreenSubtitle'),
             style: TextStyle(color: Colors.white.withValues(alpha: 0.85)),
           ),
           const SizedBox(height: 18),
@@ -269,10 +363,11 @@ class _SosScreenState extends State<SosScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Acil Kişiler',
+                    context.t('sosEmergencyContacts'),
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade900,
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -285,26 +380,45 @@ class _SosScreenState extends State<SosScreen> {
                         textInputAction: TextInputAction.done,
                         onEditingComplete: _dismissKeyboard,
                         onSubmitted: (_) => _dismissKeyboard(),
-                        decoration: const InputDecoration(
-                          labelText: 'Telefon (örn: 905xxxxxxxxx)',
-                          border: OutlineInputBorder(),
+                        decoration: InputDecoration(
+                          labelText: context.t('sosPhoneHint'),
+                          border: const OutlineInputBorder(),
                         ),
                       ),
                       const SizedBox(height: 10),
-                      ElevatedButton(
-                        onPressed: _addContact,
-                        child: const Text('Kişi Ekle'),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: _addContact,
+                              child: Text(context.t('sosAddContact')),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: _pickFromContacts,
+                              icon: const Icon(Icons.contacts, size: 20),
+                              label: Text(context.t('sosFromContacts')),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
                   const SizedBox(height: 12),
                   if (_loadingContacts)
-                    const Center(child: Padding(
-                      padding: EdgeInsets.all(12),
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ))
+                    const Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(12),
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
                   else if (_contacts.isEmpty)
-                    const Text('Henüz acil kişi yok.')
+                    Text(
+                      context.t('sosNoContactsYet'),
+                      style: TextStyle(color: Colors.grey.shade800),
+                    )
                   else
                     Wrap(
                       spacing: 10,
@@ -346,25 +460,31 @@ class _SosScreenState extends State<SosScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'SOS Alarm Ayarları',
+                  Text(
+                    context.t('sosAlarmSettings'),
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade900,
                     ),
                   ),
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      const Text('Süre:'),
+                      Text(
+                        context.t('sosDuration'),
+                        style: TextStyle(color: Colors.grey.shade900),
+                      ),
                       const SizedBox(width: 10),
                       DropdownButton<int>(
                         value: _alarmDurationSec,
-                        items: const [5, 8, 12, 20]
+                        items: [5, 8, 12, 20]
                             .map(
                               (s) => DropdownMenuItem<int>(
                                 value: s,
-                                child: Text('$s sn'),
+                                child: Text(
+                                  context.tReplace('sosSeconds', {'n': '$s'}),
+                                ),
                               ),
                             )
                             .toList(),
@@ -376,9 +496,13 @@ class _SosScreenState extends State<SosScreen> {
                   ),
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
-                    title: const Text('Sessiz modda da yüksek sesle çal'),
-                    subtitle: const Text(
-                      'Açıkken alarm akışı kullanılır (daha caydırıcı).',
+                    title: Text(
+                      context.t('sosAlarmLoudInSilent'),
+                      style: TextStyle(color: Colors.grey.shade900),
+                    ),
+                    subtitle: Text(
+                      context.t('sosAlarmLoudSubtitle'),
+                      style: TextStyle(color: Colors.grey.shade700),
                     ),
                     value: _alarmUseAlarmStream,
                     onChanged: _setAlarmMode,
@@ -448,9 +572,9 @@ class _SosScreenState extends State<SosScreen> {
                                     const Icon(Icons.warning_amber_rounded,
                                         color: Colors.white, size: 44),
                                     const SizedBox(height: 8),
-                                    const Text(
-                                      'SOS',
-                                      style: TextStyle(
+                                    Text(
+                                      context.t('sosTitle'),
+                                      style: const TextStyle(
                                         color: Colors.white,
                                         fontSize: 34,
                                         fontWeight: FontWeight.bold,
@@ -465,21 +589,13 @@ class _SosScreenState extends State<SosScreen> {
             ),
           ),
           const SizedBox(height: 14),
-          OutlinedButton.icon(
-            onPressed: _sending ? null : _sendWhatsAppWithLocation,
-            icon: const Icon(Icons.flash_on),
-            label: const Text('SOS’u Başlat (test)'),
-          ),
-          const SizedBox(height: 10),
           Text(
-            '2 saniye basılı tutun. (Demo değil: WhatsApp’a konum gönderir.)',
+            context.t('sosHoldFooterHint'),
             textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white.withValues(alpha: 0.85)),
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
           ),
         ],
       ),
     );
   }
 }
-
-

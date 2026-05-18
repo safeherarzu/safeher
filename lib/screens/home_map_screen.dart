@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
@@ -10,12 +11,22 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../data/pins_repository.dart';
+import '../l10n/app_strings.dart';
+import '../models/map_pin_visibility.dart';
 import '../models/safety_pin.dart';
 import '../services/geocoding_service.dart';
+import '../services/local_notify_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/route_corridor.dart';
 
 class HomeMapScreen extends StatefulWidget {
-  const HomeMapScreen({super.key});
+  const HomeMapScreen({
+    super.key,
+    required this.mapPinIntentListenable,
+  });
+
+  /// Profil kartlarından gelen “haritada şu pinleri göster” isteği.
+  final ValueListenable<MapPinFilterIntent?> mapPinIntentListenable;
 
   @override
   State<HomeMapScreen> createState() => _HomeMapScreenState();
@@ -41,6 +52,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     'Issız',
   ];
 
+  /// Ana Overpass sık yoğun; kısa HTTP zaman aşımı veya tek endpoint boş sonuç veriyordu.
   static const _overpassInterpreterUrls = <String>[
     'https://overpass-api.de/api/interpreter',
     'https://lz4.overpass-api.de/api/interpreter',
@@ -53,14 +65,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     for (final url in _overpassInterpreterUrls) {
       try {
         final res = await http
-            .post(
-              Uri.parse(url),
-              headers: const {
-                'Accept': 'application/json',
-                'User-Agent': 'SafeHer/1.0 (support: arzu@safeherapp.com)',
-              },
-              body: {'data': query},
-            )
+            .post(Uri.parse(url), body: {'data': query})
             .timeout(_overpassHttpTimeout);
         if (res.statusCode == 200) return res;
       } catch (_) {}
@@ -69,6 +74,8 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   }
 
   final TextEditingController _searchController = TextEditingController();
+  final TextEditingController _routeDestinationController =
+      TextEditingController();
   GoogleMapController? _mapController;
   LatLng? _pendingCameraTarget;
   LatLng? _mapContextTarget;
@@ -78,6 +85,22 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   DateTime? _lastPinCreatedAt;
   Set<Marker> _busStopMarkers = <Marker>{};
   Set<Marker> _healthMarkers = <Marker>{};
+  Set<Polyline> _routePolylines = {};
+  static const double _routeCorridorMeters = 220;
+
+  MapPinVisibilityFilter _pinVisibilityFilter = MapPinVisibilityFilter.all;
+  late final VoidCallback _mapPinIntentListener = _onMapPinIntentFromProfile;
+
+  bool _pinMatchesVisibility(SafetyPin pin) {
+    switch (_pinVisibilityFilter) {
+      case MapPinVisibilityFilter.all:
+        return true;
+      case MapPinVisibilityFilter.safeOnly:
+        return pin.isSafe;
+      case MapPinVisibilityFilter.unsafeOnly:
+        return !pin.isSafe;
+    }
+  }
   bool _isFindingHospitals = false;
   bool _isFindingPharmacies = false;
   bool _didAutoCenterOnLaunch = false;
@@ -86,12 +109,26 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   @override
   void initState() {
     super.initState();
+    widget.mapPinIntentListenable.addListener(_mapPinIntentListener);
     _initUserLocation();
+  }
+
+  void _onMapPinIntentFromProfile() {
+    final intent = widget.mapPinIntentListenable.value;
+    if (intent == null) return;
+    if (!mounted) return;
+    setState(() => _pinVisibilityFilter = intent.filter);
+    Future.microtask(() async {
+      if (!mounted) return;
+      await _fitCameraForPinVisibility();
+    });
   }
 
   @override
   void dispose() {
+    widget.mapPinIntentListenable.removeListener(_mapPinIntentListener);
     _searchController.dispose();
+    _routeDestinationController.dispose();
     super.dispose();
   }
 
@@ -155,8 +192,9 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   }
 
   Set<Marker> _markersFromPins(List<SafetyPin> pins) {
-    final allPins = [...pins, ..._offlinePins];
-    final pinMarkers = allPins
+    final combined = [...pins, ..._offlinePins];
+    final visible = combined.where(_pinMatchesVisibility);
+    final pinMarkers = visible
         .map((pin) => Marker(
               markerId: MarkerId(pin.id),
               position: LatLng(pin.lat, pin.lng),
@@ -168,6 +206,53 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
             ))
         .toSet();
     return {...pinMarkers, ..._busStopMarkers, ..._healthMarkers};
+  }
+
+  Future<void> _fitCameraForPinVisibility() async {
+    if (!mounted || _mapController == null) return;
+    try {
+      final pins = await _pinsRepository.watchPins().first;
+      final filtered =
+          [...pins, ..._offlinePins].where(_pinMatchesVisibility).toList();
+      if (filtered.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(context.t('mapFilterEmpty'))),
+          );
+        }
+        return;
+      }
+      var minLat = filtered.first.lat;
+      var maxLat = filtered.first.lat;
+      var minLng = filtered.first.lng;
+      var maxLng = filtered.first.lng;
+      for (final p in filtered.skip(1)) {
+        minLat = math.min(minLat, p.lat);
+        maxLat = math.max(maxLat, p.lat);
+        minLng = math.min(minLng, p.lng);
+        maxLng = math.max(maxLng, p.lng);
+      }
+      const pad = 0.035;
+      if (!mounted || _mapController == null) return;
+      try {
+        await _mapController!.animateCamera(
+          CameraUpdate.newLatLngBounds(
+            LatLngBounds(
+              southwest: LatLng(minLat - pad, minLng - pad),
+              northeast: LatLng(maxLat + pad, maxLng + pad),
+            ),
+            80,
+          ),
+        );
+      } catch (_) {
+        await _mapController!.animateCamera(
+          CameraUpdate.newLatLngZoom(
+            LatLng((minLat + maxLat) / 2, (minLng + maxLng) / 2),
+            14,
+          ),
+        );
+      }
+    } catch (_) {}
   }
 
   bool _isOfflinePin(SafetyPin pin) => pin.id.startsWith('local_');
@@ -319,9 +404,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
           icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueAzure),
           infoWindow: InfoWindow(
             title: stop.name.isEmpty ? 'Otobüs Durağı' : stop.name,
-            snippet: stop.routes.isEmpty
-                ? 'Yakındaki durak'
-                : 'Hatlar: ${stop.routes.join(', ')}',
+            snippet: 'Yakındaki durak',
           ),
         );
       }).toSet();
@@ -342,16 +425,16 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       final query = '''
 [out:json][timeout:20];
 (
-  node["highway"="bus_stop"](around:2500,$lat,$lng);
-  way["highway"="bus_stop"](around:2500,$lat,$lng);
-  relation["highway"="bus_stop"](around:2500,$lat,$lng);
-  node["public_transport"="platform"](around:2500,$lat,$lng);
-  way["public_transport"="platform"](around:2500,$lat,$lng);
-  relation["public_transport"="platform"](around:2500,$lat,$lng);
-  node["amenity"="bus_station"](around:3500,$lat,$lng);
-  way["amenity"="bus_station"](around:3500,$lat,$lng);
-  relation["amenity"="bus_station"](around:3500,$lat,$lng);
-  node["public_transport"="stop_position"](around:2500,$lat,$lng);
+  node["highway"="bus_stop"](around:1200,$lat,$lng);
+  way["highway"="bus_stop"](around:1200,$lat,$lng);
+  relation["highway"="bus_stop"](around:1200,$lat,$lng);
+  node["public_transport"="platform"](around:1200,$lat,$lng);
+  way["public_transport"="platform"](around:1200,$lat,$lng);
+  relation["public_transport"="platform"](around:1200,$lat,$lng);
+  node["amenity"="bus_station"](around:2500,$lat,$lng);
+  way["amenity"="bus_station"](around:2500,$lat,$lng);
+  relation["amenity"="bus_station"](around:2500,$lat,$lng);
+  node["public_transport"="stop_position"](around:1200,$lat,$lng);
 );
 out center 80;
 ''';
@@ -372,7 +455,6 @@ out center 80;
                   (center?['lon'] as num?)?.toDouble() ??
                   0),
               name: (tags['name'] as String?) ?? '',
-              routes: _extractBusRoutes(tags),
             );
           })
           .where((e) => e.lat != 0 && e.lng != 0)
@@ -380,46 +462,6 @@ out center 80;
     } catch (_) {
       return const [];
     }
-  }
-
-  List<String> _extractBusRoutes(Map<String, dynamic> tags) {
-    final raw = [
-      tags['route_ref'],
-      tags['ref'],
-      tags['local_ref'],
-      tags['bus_routes'],
-      tags['routes'],
-    ].whereType<String>().join(';');
-    if (raw.trim().isEmpty) return const [];
-
-    final routes = raw
-        .split(RegExp(r'[,;/| ]+'))
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort();
-    return routes.take(8).toList();
-  }
-
-  List<_BusStop> _placesFromOverpassElements(List<dynamic> elements) {
-    return elements
-        .map((e) {
-          final m = e as Map<String, dynamic>;
-          final tags = (m['tags'] as Map<String, dynamic>? ?? const {});
-          final center = m['center'] as Map<String, dynamic>?;
-          return _BusStop(
-            lat: ((m['lat'] as num?)?.toDouble() ??
-                (center?['lat'] as num?)?.toDouble() ??
-                0),
-            lng: ((m['lon'] as num?)?.toDouble() ??
-                (center?['lon'] as num?)?.toDouble() ??
-                0),
-            name: (tags['name'] as String?) ?? '',
-          );
-        })
-        .where((e) => e.lat != 0 && e.lng != 0)
-        .toList();
   }
 
   Future<List<_BusStop>> _fetchNearbyPlaces({
@@ -443,42 +485,23 @@ out center $outLimit;
       if (res == null) return const [];
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final elements = (map['elements'] as List<dynamic>? ?? const []);
-      return _placesFromOverpassElements(elements);
-    } catch (_) {
-      return const [];
-    }
-  }
-
-  Future<List<_BusStop>> _fetchNearbyPlacesAny({
-    required double lat,
-    required double lng,
-    required List<String> filters,
-    required int radius,
-    int outLimit = 60,
-    bool nodesOnly = false,
-  }) async {
-    try {
-      final selectors = filters
-          .expand((filter) => nodesOnly
-              ? ['  node[$filter](around:$radius,$lat,$lng);']
-              : [
-                  '  node[$filter](around:$radius,$lat,$lng);',
-                  '  way[$filter](around:$radius,$lat,$lng);',
-                  '  relation[$filter](around:$radius,$lat,$lng);',
-                ])
-          .join('\n');
-      final query = '''
-[out:json][timeout:25];
-(
-$selectors
-);
-out center $outLimit;
-''';
-      final res = await _postOverpass(query);
-      if (res == null) return const [];
-      final map = jsonDecode(res.body) as Map<String, dynamic>;
-      final elements = (map['elements'] as List<dynamic>? ?? const []);
-      return _placesFromOverpassElements(elements);
+      return elements
+          .map((e) {
+            final m = e as Map<String, dynamic>;
+            final tags = (m['tags'] as Map<String, dynamic>? ?? const {});
+            final center = m['center'] as Map<String, dynamic>?;
+            return _BusStop(
+              lat: ((m['lat'] as num?)?.toDouble() ??
+                  (center?['lat'] as num?)?.toDouble() ??
+                  0),
+              lng: ((m['lon'] as num?)?.toDouble() ??
+                  (center?['lon'] as num?)?.toDouble() ??
+                  0),
+              name: (tags['name'] as String?) ?? '',
+            );
+          })
+          .where((e) => e.lat != 0 && e.lng != 0)
+          .toList();
     } catch (_) {
       return const [];
     }
@@ -515,6 +538,39 @@ out center $outLimit;
       return da.compareTo(db);
     });
     return deduped.take(maxResults).toList();
+  }
+
+  Future<List<_BusStop>> _fetchNearestPlacesWithExpansion({
+    required double lat,
+    required double lng,
+    required String overpassFilter,
+    required List<int> radii,
+    required int maxResults,
+    int outLimit = 100,
+  }) async {
+    final seen = <String>{};
+    final merged = <_BusStop>[];
+    for (final r in radii) {
+      final batch = await _fetchNearbyPlaces(
+        lat: lat,
+        lng: lng,
+        overpassFilter: overpassFilter,
+        radius: r,
+        outLimit: outLimit,
+      );
+      for (final p in batch) {
+        final key =
+            '${p.lat.toStringAsFixed(5)}_${p.lng.toStringAsFixed(5)}_${p.name}';
+        if (seen.add(key)) merged.add(p);
+      }
+    }
+    if (merged.isEmpty) return const [];
+    merged.sort((a, b) {
+      final da = _distanceMeters(lat, lng, a.lat, a.lng);
+      final db = _distanceMeters(lat, lng, b.lat, b.lng);
+      return da.compareTo(db);
+    });
+    return merged.take(maxResults).toList();
   }
 
   double _distanceMeters(double lat1, double lon1, double lat2, double lon2) {
@@ -558,7 +614,7 @@ out center $outLimit;
   Future<void> _showNearbyHospitals() async {
     if (_isFindingHospitals) return;
     _isFindingHospitals = true;
-    final target = await _resolveTargetForNearby();
+    final target = await _resolveHealthSearchOrigin();
     if (!mounted) return;
     if (target == null) {
       _isFindingHospitals = false;
@@ -573,20 +629,80 @@ out center $outLimit;
     final lat = target.latitude;
     final lng = target.longitude;
 
-    final health = await _fetchNearbyPlacesAny(
-      lat: lat,
-      lng: lng,
-      filters: const [
-        '"amenity"="hospital"',
-        '"amenity"="clinic"',
-        '"healthcare"="hospital"',
-        '"healthcare"="clinic"',
-      ],
-      radius: 50000,
-      outLimit: 40,
-      nodesOnly: true,
-    );
-    final combined = _mergeByDistance(lat, lng, [health], 10);
+    final hospitalLists = await Future.wait([
+      _fetchNearestPlacesFast(
+        lat: lat,
+        lng: lng,
+        overpassFilter: '"amenity"="hospital"',
+        radius: 10000,
+        maxResults: 10,
+        outLimit: 100,
+      ),
+      _fetchNearestPlacesFast(
+        lat: lat,
+        lng: lng,
+        overpassFilter: '"amenity"="clinic"',
+        radius: 10000,
+        maxResults: 10,
+        outLimit: 80,
+      ),
+      _fetchNearestPlacesFast(
+        lat: lat,
+        lng: lng,
+        overpassFilter: '"healthcare"="hospital"',
+        radius: 10000,
+        maxResults: 10,
+        outLimit: 80,
+      ),
+      _fetchNearestPlacesFast(
+        lat: lat,
+        lng: lng,
+        overpassFilter: '"healthcare"="clinic"',
+        radius: 10000,
+        maxResults: 10,
+        outLimit: 80,
+      ),
+    ]);
+
+    var combined = _mergeByDistance(lat, lng, hospitalLists, 10);
+
+    if (combined.isEmpty) {
+      final expanded = await Future.wait([
+        _fetchNearestPlacesWithExpansion(
+          lat: lat,
+          lng: lng,
+          overpassFilter: '"amenity"="hospital"',
+          radii: const [4000, 8000, 15000, 30000, 50000],
+          maxResults: 20,
+          outLimit: 120,
+        ),
+        _fetchNearestPlacesWithExpansion(
+          lat: lat,
+          lng: lng,
+          overpassFilter: '"amenity"="clinic"',
+          radii: const [4000, 8000, 15000, 30000, 50000],
+          maxResults: 20,
+          outLimit: 120,
+        ),
+        _fetchNearestPlacesWithExpansion(
+          lat: lat,
+          lng: lng,
+          overpassFilter: '"healthcare"="hospital"',
+          radii: const [4000, 8000, 15000, 30000, 50000],
+          maxResults: 20,
+          outLimit: 120,
+        ),
+        _fetchNearestPlacesWithExpansion(
+          lat: lat,
+          lng: lng,
+          overpassFilter: '"healthcare"="clinic"',
+          radii: const [4000, 8000, 15000, 30000, 50000],
+          maxResults: 20,
+          outLimit: 120,
+        ),
+      ]);
+      combined = _mergeByDistance(lat, lng, expanded, 10);
+    }
 
     if (!mounted) return;
     if (combined.isEmpty) {
@@ -633,7 +749,7 @@ out center $outLimit;
   Future<void> _showNearbyPharmacies() async {
     if (_isFindingPharmacies) return;
     _isFindingPharmacies = true;
-    final target = await _resolveTargetForNearby();
+    final target = await _resolveHealthSearchOrigin();
     if (!mounted) return;
     if (target == null) {
       _isFindingPharmacies = false;
@@ -657,11 +773,12 @@ out center $outLimit;
       outLimit: 100,
     );
     if (pharmacies.isEmpty) {
-      pharmacies = await _fetchNearbyPlacesAny(
+      pharmacies = await _fetchNearestPlacesWithExpansion(
         lat: lat,
         lng: lng,
-        filters: const ['"amenity"="pharmacy"'],
-        radius: 40000,
+        overpassFilter: '"amenity"="pharmacy"',
+        radii: const [2500, 5000, 10000, 20000, 40000],
+        maxResults: 20,
         outLimit: 120,
       );
     }
@@ -731,6 +848,14 @@ out center $outLimit;
     final pos = await _tryGetCurrentPosition();
     if (pos == null) return null;
     return LatLng(pos.latitude, pos.longitude);
+  }
+
+  /// Hastane / eczane için önce **GPS**; yoksa harita merkezi (arama sonrası yanlış “yakın” olmasın).
+  Future<LatLng?> _resolveHealthSearchOrigin() async {
+    final pos = await _tryGetCurrentPosition();
+    if (pos != null) return LatLng(pos.latitude, pos.longitude);
+    if (_mapContextTarget != null) return _mapContextTarget;
+    return null;
   }
 
   Future<void> _showTaxiPicker(double lat, double lng) async {
@@ -1102,111 +1227,191 @@ out center $outLimit;
 
     await showModalBottomSheet<void>(
       context: context,
+      backgroundColor: Colors.white,
       builder: (sheetContext) {
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            final isSafe = pin.isSafe;
+        const kInk = Color(0xFF12082A);
+        const kChipFill = Color(0xFFE4D8FF);
+        const kChipBorder = Color(0xFF5C2FA8);
 
-            return Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Kullanıcı Rozeti',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 6),
-                  const Row(
-                    children: [
-                      Icon(Icons.person),
-                      SizedBox(width: 6),
-                      Text('Yeni Üye'),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  const Divider(),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.circle,
-                        color: isSafe ? Colors.green : Colors.red,
-                        size: 12,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        isSafe ? 'Güvenli Bölge' : 'Güvensiz Bölge',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    children: pin.tags.isEmpty
-                        ? const [
-                            Chip(label: Text('Etiket yok')),
-                          ]
-                        : pin.tags.map((t) => Chip(label: Text(t))).toList(),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.thumb_up, color: Colors.green),
-                        onPressed: () async {
-                          if (_isOfflinePin(pin)) {
-                            setModalState(() => likes += 1);
-                            return;
-                          }
-                          await _pinsRepository.likePin(pin.id);
-                          setModalState(() => likes += 1);
-                        },
-                      ),
-                      Text('$likes'),
-                      const SizedBox(width: 20),
-                      IconButton(
-                        icon: const Icon(Icons.thumb_down, color: Colors.red),
-                        onPressed: () async {
-                          if (_isOfflinePin(pin)) {
-                            setModalState(() => dislikes += 1);
-                            return;
-                          }
-                          await _pinsRepository.dislikePin(pin.id);
-                          setModalState(() => dislikes += 1);
-                        },
-                      ),
-                      Text('$dislikes'),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Güven Skoru: ${likes - dislikes}',
-                    style: const TextStyle(color: Colors.red),
-                  ),
-                  Text(
-                    'Topluluk Değerlendirmesi: ${_getScoreText(likes, dislikes)}',
-                    style: const TextStyle(color: Colors.red),
-                  ),
-                  const SizedBox(height: 16),
-                  if (!_isOfflinePin(pin))
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Navigator.pop(sheetContext);
-                          _reportPin(pin);
-                        },
-                        icon: const Icon(Icons.flag_outlined),
-                        label: const Text('İşareti Şikayet Et'),
+        final sheetTheme = ThemeData(
+          useMaterial3: true,
+          brightness: Brightness.light,
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF5C2FA8),
+            brightness: Brightness.light,
+          ),
+          textTheme: ThemeData.light().textTheme.apply(
+            bodyColor: kInk,
+            displayColor: kInk,
+          ),
+          chipTheme: ChipThemeData(
+            backgroundColor: kChipFill,
+            disabledColor: Colors.grey.shade300,
+            selectedColor: const Color(0xFFD4C4FF),
+            deleteIconColor: kChipBorder,
+            labelStyle: const TextStyle(
+              color: kInk,
+              fontWeight: FontWeight.w700,
+              fontSize: 14,
+              height: 1.25,
+            ),
+            secondaryLabelStyle: const TextStyle(
+              color: kInk,
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+            ),
+            side: const BorderSide(color: kChipBorder, width: 1),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          ),
+        );
+
+        Widget tagChip(String text) {
+          return Chip(
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            visualDensity: VisualDensity.compact,
+            backgroundColor: kChipFill,
+            side: const BorderSide(color: kChipBorder, width: 1),
+            label: Text(
+              text,
+              style: const TextStyle(
+                color: kInk,
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
+                height: 1.25,
+              ),
+            ),
+          );
+        }
+
+        return Theme(
+          data: sheetTheme,
+          child: StatefulBuilder(
+            builder: (context, setModalState) {
+              final isSafe = pin.isSafe;
+              const kBody = Color(0xFF1A0F3D);
+              final zoneColor =
+                  isSafe ? const Color(0xFF1B5E20) : const Color(0xFFB71C1C);
+
+              return Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Kullanıcı Rozeti',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: kBody,
                       ),
                     ),
-                  const SizedBox(height: 8),
-                  if (canDelete)
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Icon(Icons.person, color: Colors.grey.shade800),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Yeni Üye',
+                          style: TextStyle(
+                            color: Colors.grey.shade900,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    const Divider(),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.circle,
+                          color: isSafe ? Colors.green.shade700 : Colors.red.shade700,
+                          size: 12,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          isSafe ? 'Güvenli Bölge' : 'Güvensiz Bölge',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: zoneColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: pin.tags.isEmpty
+                          ? [tagChip(sheetContext.t('mapPinTagsEmpty'))]
+                          : pin.tags.map(tagChip).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.thumb_up, color: Colors.green),
+                          onPressed: () async {
+                            if (_isOfflinePin(pin)) {
+                              setModalState(() => likes += 1);
+                              return;
+                            }
+                            await _pinsRepository.likePin(pin.id);
+                            setModalState(() => likes += 1);
+                          },
+                        ),
+                        Text(
+                          '$likes',
+                          style: const TextStyle(
+                            color: kBody,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                        const SizedBox(width: 20),
+                        IconButton(
+                          icon: const Icon(Icons.thumb_down, color: Colors.red),
+                          onPressed: () async {
+                            if (_isOfflinePin(pin)) {
+                              setModalState(() => dislikes += 1);
+                              return;
+                            }
+                            await _pinsRepository.dislikePin(pin.id);
+                            setModalState(() => dislikes += 1);
+                          },
+                        ),
+                        Text(
+                          '$dislikes',
+                          style: const TextStyle(
+                            color: kBody,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Güven Skoru: ${likes - dislikes}',
+                      style: TextStyle(
+                        color: Colors.red.shade800,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      'Topluluk Değerlendirmesi: ${_getScoreText(likes, dislikes)}',
+                      style: TextStyle(
+                        color: Colors.red.shade800,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (canDelete)
                     Align(
                       alignment: Alignment.centerLeft,
                       child: ElevatedButton(
@@ -1243,13 +1448,285 @@ out center $outLimit;
                       ),
                     )
                   else
-                    const Padding(
-                      padding: EdgeInsets.only(top: 4),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
                       child: Text(
                         'Bu işareti yalnızca ekleyen kullanıcı silebilir.',
-                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                        style: TextStyle(
+                          color: Colors.grey.shade900,
+                          fontSize: 13,
+                          height: 1.4,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
+                ],
+              ),
+            );
+          },
+        ),
+        );
+      },
+    );
+  }
+
+  void _clearPlannedRoute() {
+    setState(() => _routePolylines = {});
+  }
+
+  void _openRouteSafetyPlanner(List<SafetyPin> pins) {
+    _routeDestinationController.clear();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      useSafeArea: true,
+      builder: (ctx) {
+        final pad = MediaQuery.paddingOf(ctx).bottom;
+        final viewInset = MediaQuery.viewInsetsOf(ctx).bottom;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + pad + viewInset),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                ctx.t('routePlanSheetTitle'),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF241247),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                ctx.t('routePlanSheetBody'),
+                style: TextStyle(
+                  color: Colors.grey.shade800,
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _routeDestinationController,
+                textInputAction: TextInputAction.done,
+                decoration: InputDecoration(
+                  labelText: ctx.t('routePlanDestinationHint'),
+                  border: const OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 18),
+              FilledButton(
+                onPressed: () async {
+                  final q = _routeDestinationController.text.trim();
+                  if (q.isEmpty) return;
+                  Navigator.of(ctx).pop();
+                  await _runRouteSafetyAnalysis(pins, q);
+                },
+                child: Text(ctx.t('routePlanAnalyze')),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _fitRouteBounds(LatLng a, LatLng b) async {
+    if (_mapController == null) return;
+    final south = math.min(a.latitude, b.latitude);
+    final north = math.max(a.latitude, b.latitude);
+    final west = math.min(a.longitude, b.longitude);
+    final east = math.max(a.longitude, b.longitude);
+    const pad = 0.035;
+    try {
+      await _mapController!.animateCamera(
+        CameraUpdate.newLatLngBounds(
+          LatLngBounds(
+            southwest: LatLng(south - pad, west - pad),
+            northeast: LatLng(north + pad, east + pad),
+          ),
+          72,
+        ),
+      );
+    } catch (_) {
+      await _mapController!.animateCamera(
+        CameraUpdate.newLatLngZoom(
+          LatLng((a.latitude + b.latitude) / 2, (a.longitude + b.longitude) / 2),
+          14,
+        ),
+      );
+    }
+  }
+
+  Future<void> _runRouteSafetyAnalysis(
+    List<SafetyPin> pins,
+    String destinationQuery,
+  ) async {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (c) => const Center(child: CircularProgressIndicator()),
+    );
+
+    void closeLoader() {
+      if (!mounted) return;
+      final nav = Navigator.of(context);
+      if (nav.canPop()) nav.pop();
+    }
+
+    try {
+      LatLng? origin;
+      final pos = await _tryGetCurrentPosition();
+      if (pos != null) origin = LatLng(pos.latitude, pos.longitude);
+      origin ??= _mapContextTarget;
+
+      if (origin == null) {
+        closeLoader();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.t('routePlanOriginMissing'))),
+        );
+        return;
+      }
+
+      final dest = await _geocodeWithFallback(destinationQuery);
+      if (dest == null) {
+        closeLoader();
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(context.t('routePlanGeocodeFail'))),
+        );
+        return;
+      }
+
+      final hits = <({SafetyPin pin, double meters})>[];
+      for (final p in pins) {
+        if (p.isSafe) continue;
+        final d = minDistanceMetersToSegment(
+          LatLng(p.lat, p.lng),
+          origin,
+          dest,
+        );
+        if (d <= _routeCorridorMeters) {
+          hits.add((pin: p, meters: d));
+        }
+      }
+      hits.sort((a, b) => a.meters.compareTo(b.meters));
+      final count = hits.length;
+
+      if (!mounted) return;
+      closeLoader();
+
+      final o = origin;
+      setState(() {
+        _routePolylines = {
+          Polyline(
+            polylineId: const PolylineId('route_plan'),
+            color: const Color(0xFF7B4DFF),
+            width: 5,
+            geodesic: true,
+            points: <LatLng>[o, dest],
+          ),
+        };
+      });
+
+      await _fitRouteBounds(o, dest);
+
+      if (!mounted) return;
+      final title = context.t('routeNotifyTitle');
+      final body = count > 0
+          ? context.tReplace('routeNotifyBodyMany', {'count': '$count'})
+          : context.t('routeNotifyBodyZero');
+      await LocalNotifyService.instance.showImmediate(title: title, body: body);
+
+      if (!mounted) return;
+      _showRouteHitsSheet(hits);
+    } catch (e) {
+      closeLoader();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e')),
+      );
+    }
+  }
+
+  void _showRouteHitsSheet(List<({SafetyPin pin, double meters})> hits) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.45,
+          minChildSize: 0.28,
+          maxChildSize: 0.9,
+          builder: (_, scroll) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              child: ListView(
+                controller: scroll,
+                children: [
+                  Text(
+                    ctx.t('routePlanUnsafeTitle'),
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (hits.isEmpty)
+                    Text(
+                      ctx.t('routePlanUnsafeNone'),
+                      style: TextStyle(
+                        color: Colors.grey.shade800,
+                        height: 1.35,
+                      ),
+                    )
+                  else
+                    ...hits.map(
+                      (h) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: ListTile(
+                          tileColor: const Color(0xFFFFF3F5),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: BorderSide(color: Colors.red.shade200),
+                          ),
+                          title: Text(
+                            ctx.tReplace(
+                              'routePlanUnsafeLine',
+                              {
+                                'meters': '${h.meters.round()}',
+                                'tags': h.pin.tags.isEmpty
+                                    ? '—'
+                                    : h.pin.tags.join(', '),
+                              },
+                            ),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 14),
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _clearPlannedRoute();
+                    },
+                    icon: const Icon(Icons.delete_outline),
+                    label: Text(ctx.t('routePlanClearRoute')),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: Text(ctx.t('routePlanClose')),
+                  ),
                 ],
               ),
             );
@@ -1259,66 +1736,17 @@ out center $outLimit;
     );
   }
 
-  Future<void> _reportPin(SafetyPin pin) async {
-    if (_isOfflinePin(pin)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Yerel işaretler şikayet edilemez.')),
-      );
-      return;
-    }
-
-    const reasons = <String>[
-      'Yanlış konum',
-      'Uygunsuz/yanıltıcı işaret',
-      'Tekrarlanan işaret',
-      'Diğer',
-    ];
-
-    final reason = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        return SimpleDialog(
-          title: const Text('İşareti Şikayet Et'),
-          children: [
-            for (final reason in reasons)
-              SimpleDialogOption(
-                onPressed: () => Navigator.of(dialogContext).pop(reason),
-                child: Text(reason),
-              ),
-            SimpleDialogOption(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Vazgeç'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (reason == null || !mounted) return;
-
-    try {
-      await _pinsRepository.reportPin(pinId: pin.id, reason: reason);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Şikayet alındı. Moderasyon ekibi inceleyecek.'),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Şikayet gönderilemedi: $e')),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(gradient: AppTheme.pageGradient),
-      child: Column(
-        children: [
-          Material(
+      child: StreamBuilder<List<SafetyPin>>(
+        stream: _pinsRepository.watchPins(),
+        builder: (context, snapshot) {
+          final pins = snapshot.data ?? const <SafetyPin>[];
+          return Column(
+            children: [
+              Material(
             elevation: 0,
             color: Colors.transparent,
             child: Padding(
@@ -1348,6 +1776,53 @@ out center $outLimit;
                       ),
                     ),
                   ),
+                  if (_pinVisibilityFilter != MapPinVisibilityFilter.all) ...[
+                    const SizedBox(height: 8),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        color: Colors.amber.withValues(alpha: 0.22),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.45),
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _pinVisibilityFilter ==
+                                        MapPinVisibilityFilter.safeOnly
+                                    ? context.t('mapFilterActiveSafe')
+                                    : context.t('mapFilterActiveUnsafe'),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => setState(
+                                () => _pinVisibilityFilter =
+                                    MapPinVisibilityFilter.all,
+                              ),
+                              child: Text(
+                                context.t('mapFilterClear'),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -1424,6 +1899,22 @@ out center $outLimit;
                       ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.65),
+                        ),
+                        backgroundColor: Colors.white.withValues(alpha: 0.08),
+                      ),
+                      onPressed: () => _openRouteSafetyPlanner(pins),
+                      icon: const Icon(Icons.alt_route),
+                      label: Text(context.t('routePlanButton')),
+                    ),
+                  ),
                   if (_busStopMarkers.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Align(
@@ -1457,28 +1948,43 @@ out center $outLimit;
           Expanded(
             child: ClipRRect(
               borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-              child: StreamBuilder<List<SafetyPin>>(
-                stream: _pinsRepository.watchPins(),
-                builder: (context, snapshot) {
-                  final pins = snapshot.data ?? const <SafetyPin>[];
-                  final markers = _markersFromPins(pins);
-
-                  return GoogleMap(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  GoogleMap(
                     initialCameraPosition: const CameraPosition(
                       target: LatLng(41.0082, 28.9784),
                       zoom: 12,
                     ),
                     myLocationEnabled: _myLocationEnabled,
-                    markers: markers,
+                    markers: _markersFromPins(pins),
+                    polylines: _routePolylines,
                     onMapCreated: _onMapCreated,
                     onCameraMove: (cp) => _mapContextTarget = cp.target,
                     onTap: (pos) => _addPinAt(pos),
-                  );
-                },
+                  ),
+                  if (_routePolylines.isNotEmpty)
+                    Positioned(
+                      top: 10,
+                      right: 10,
+                      child: Material(
+                        color: Colors.white,
+                        elevation: 3,
+                        shape: const CircleBorder(),
+                        child: IconButton(
+                          tooltip: context.t('routePlanClearRoute'),
+                          onPressed: _clearPlannedRoute,
+                          icon: const Icon(Icons.close),
+                        ),
+                      ),
+                    ),
+                ],
               ),
             ),
           ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -1488,13 +1994,11 @@ class _BusStop {
   final double lat;
   final double lng;
   final String name;
-  final List<String> routes;
 
   const _BusStop({
     required this.lat,
     required this.lng,
     required this.name,
-    this.routes = const [],
   });
 }
 

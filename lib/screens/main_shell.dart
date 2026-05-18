@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../l10n/app_strings.dart';
+import '../models/map_pin_visibility.dart';
 import 'home_map_screen.dart';
 import 'profile_screen.dart';
 import 'sos_screen.dart';
@@ -18,8 +19,25 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
+  /// Profil → harita: hangi pinler vurgulansın (her atamada yeni [token] ile tetiklenir).
+  final ValueNotifier<MapPinFilterIntent?> _mapPinIntent = ValueNotifier(null);
+
   /// Keep one instance per tab once built; defer SOS/profile until first opened.
   final List<Widget?> _pages = [null, null, null];
+
+  @override
+  void dispose() {
+    _mapPinIntent.dispose();
+    super.dispose();
+  }
+
+  void _openMapWithPinFilter(MapPinVisibilityFilter filter) {
+    setState(() => _index = 0);
+    _mapPinIntent.value = MapPinFilterIntent(
+      filter,
+      DateTime.now().microsecondsSinceEpoch,
+    );
+  }
 
   Widget _tabSlot(int i, Widget Function() create) {
     if (_pages[i] != null) return _pages[i]!;
@@ -33,7 +51,7 @@ class _MainShellState extends State<MainShell> {
   Widget build(BuildContext context) {
     final titles = [
       context.t('map'),
-      'SOS',
+      context.t('sosTitle'),
       context.t('profile'),
     ];
 
@@ -44,9 +62,15 @@ class _MainShellState extends State<MainShell> {
           index: _index,
           sizing: StackFit.expand,
           children: [
-            _tabSlot(0, () => const HomeMapScreen()),
-            _tabSlot(1, () => const SosScreen()),
-            _tabSlot(2, () => const ProfileScreen()),
+            _tabSlot(
+              0,
+              () => HomeMapScreen(mapPinIntentListenable: _mapPinIntent),
+            ),
+            _tabSlot(1, () => SosScreen(visible: _index == 1)),
+            _tabSlot(
+              2,
+              () => ProfileScreen(onOpenMapWithPinFilter: _openMapWithPinFilter),
+            ),
           ],
         ),
         appBar: AppBar(
@@ -97,7 +121,7 @@ class _MainShellState extends State<MainShell> {
                 ),
                 BottomNavigationBarItem(
                   icon: Icon(Icons.warning),
-                  label: 'SOS',
+                  label: context.t('sosTitle'),
                 ),
                 BottomNavigationBarItem(
                   icon: Icon(Icons.person),
@@ -111,4 +135,3 @@ class _MainShellState extends State<MainShell> {
     );
   }
 }
-

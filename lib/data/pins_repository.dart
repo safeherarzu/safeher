@@ -58,20 +58,5 @@ class PinsRepository {
   Future<void> deletePin(String pinId) async {
     await _firestore.collection('locations').doc(pinId).delete();
   }
-
-  Future<void> reportPin({
-    required String pinId,
-    required String reason,
-  }) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    await _firestore.collection('reports').add({
-      'targetType': 'location',
-      'targetId': pinId,
-      'reason': reason,
-      'status': 'open',
-      'userId': uid,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-  }
 }
 

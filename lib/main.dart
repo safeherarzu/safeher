@@ -4,6 +4,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'firebase_options.dart';
 import 'services/app_language_service.dart';
+import 'services/local_notify_service.dart';
 import 'screens/startup_flow.dart';
 import 'theme/app_theme.dart';
 
@@ -11,6 +12,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await AppLanguageService.instance.init();
+  await LocalNotifyService.instance.init();
   runApp(const MyApp());
 }
 

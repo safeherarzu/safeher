@@ -16,19 +16,31 @@ class AuthScreen extends StatefulWidget {
 
 class _AuthScreenState extends State<AuthScreen> {
   static const _rememberMeKey = 'rememberMe';
+  static const _preferLoginKey = 'authPreferLoginNextLaunch';
+  static const _savedEmailKey = 'authSavedEmail';
 
-  _AuthMode _mode = _AuthMode.login;
+  _AuthMode _mode = _AuthMode.register;
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
   bool _rememberMe = true;
   bool _busy = false;
   String? _error;
+  bool _prefsLoaded = false;
+
+  ButtonStyle get _linkButtonStyle => TextButton.styleFrom(
+        foregroundColor: const Color(0xFFFFE082),
+        textStyle: const TextStyle(
+          fontWeight: FontWeight.w800,
+          fontSize: 15,
+          letterSpacing: 0.2,
+        ),
+      );
 
   @override
   void initState() {
     super.initState();
-    _loadRememberMe();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadAuthPrefs());
   }
 
   @override
@@ -39,11 +51,20 @@ class _AuthScreenState extends State<AuthScreen> {
     super.dispose();
   }
 
-  Future<void> _loadRememberMe() async {
+  Future<void> _loadAuthPrefs() async {
     final prefs = await SharedPreferences.getInstance();
-    final value = prefs.getBool(_rememberMeKey);
+    final preferLogin = prefs.getBool(_preferLoginKey) ?? false;
+    final remember = prefs.getBool(_rememberMeKey) ?? true;
+    final savedEmail = prefs.getString(_savedEmailKey);
     if (!mounted) return;
-    setState(() => _rememberMe = value ?? true);
+    setState(() {
+      _prefsLoaded = true;
+      _mode = preferLogin ? _AuthMode.login : _AuthMode.register;
+      _rememberMe = remember;
+      if (remember && savedEmail != null && savedEmail.isNotEmpty) {
+        _email.text = savedEmail;
+      }
+    });
   }
 
   Future<void> _setRememberMe(bool value) async {
@@ -51,6 +72,16 @@ class _AuthScreenState extends State<AuthScreen> {
     await prefs.setBool(_rememberMeKey, value);
     if (!mounted) return;
     setState(() => _rememberMe = value);
+  }
+
+  Future<void> _persistAfterSuccessfulAuth() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_preferLoginKey, true);
+    if (_rememberMe) {
+      await prefs.setString(_savedEmailKey, _email.text.trim());
+    } else {
+      await prefs.remove(_savedEmailKey);
+    }
   }
 
   Future<void> _login() async {
@@ -64,6 +95,7 @@ class _AuthScreenState extends State<AuthScreen> {
         password: _password.text,
       );
       await _setRememberMe(_rememberMe);
+      await _persistAfterSuccessfulAuth();
     } on FirebaseAuthException catch (e) {
       setState(() => _error = e.message ?? context.t('loginFailed'));
     } finally {
@@ -87,6 +119,7 @@ class _AuthScreenState extends State<AuthScreen> {
         password: _password.text,
       );
       await _setRememberMe(_rememberMe);
+      await _persistAfterSuccessfulAuth();
     } on FirebaseAuthException catch (e) {
       setState(() => _error = e.message ?? context.t('registerFailed'));
     } finally {
@@ -117,6 +150,17 @@ class _AuthScreenState extends State<AuthScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_prefsLoaded) {
+      return Container(
+        decoration: const BoxDecoration(gradient: AppTheme.pageGradient),
+        child: const Scaffold(
+          body: Center(
+            child: CircularProgressIndicator(color: Colors.white),
+          ),
+        ),
+      );
+    }
+
     final isLogin = _mode == _AuthMode.login;
     final isRegister = _mode == _AuthMode.register;
 
@@ -208,7 +252,7 @@ class _AuthScreenState extends State<AuthScreen> {
                         checkColor: Colors.white,
                         title: Text(
                           context.t('rememberMe'),
-                          style: TextStyle(color: Colors.white),
+                          style: const TextStyle(color: Colors.white),
                         ),
                         onChanged: _busy
                             ? null
@@ -239,19 +283,36 @@ class _AuthScreenState extends State<AuthScreen> {
                             ),
                     ),
                     const SizedBox(height: 8),
-                    if (_mode == _AuthMode.login)
+                    if (_mode == _AuthMode.login) ...[
                       TextButton(
-                        onPressed: _busy ? null : () => setState(() => _mode = _AuthMode.register),
+                        style: _linkButtonStyle,
+                        onPressed: _busy
+                            ? null
+                            : () => setState(() => _mode = _AuthMode.register),
                         child: Text(context.t('noAccountRegister')),
                       ),
-                    if (_mode == _AuthMode.login)
                       TextButton(
-                        onPressed: _busy ? null : () => setState(() => _mode = _AuthMode.forgot),
+                        style: _linkButtonStyle,
+                        onPressed: _busy
+                            ? null
+                            : () => setState(() => _mode = _AuthMode.forgot),
                         child: Text(context.t('forgotPasswordShort')),
                       ),
-                    if (_mode != _AuthMode.login)
+                    ],
+                    if (_mode == _AuthMode.register)
                       TextButton(
-                        onPressed: _busy ? null : () => setState(() => _mode = _AuthMode.login),
+                        style: _linkButtonStyle,
+                        onPressed: _busy
+                            ? null
+                            : () => setState(() => _mode = _AuthMode.login),
+                        child: Text(context.t('haveAccountLogin')),
+                      ),
+                    if (_mode == _AuthMode.forgot)
+                      TextButton(
+                        style: _linkButtonStyle,
+                        onPressed: _busy
+                            ? null
+                            : () => setState(() => _mode = _AuthMode.login),
                         child: Text(context.t('backToLogin')),
                       ),
                   ],
@@ -264,4 +325,3 @@ class _AuthScreenState extends State<AuthScreen> {
     );
   }
 }
-

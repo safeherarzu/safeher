@@ -213,13 +213,13 @@ class _OnboardingView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const pages = [
-      'assets/onboarding/onboarding1.png',
+    const imageSlides = [
       'assets/onboarding/onboarding2.png',
       'assets/onboarding/onboarding3.png',
     ];
+    const pageCount = 3;
 
-    final isLast = pageIndex == pages.length - 1;
+    final isLast = pageIndex == pageCount - 1;
 
     return Scaffold(
       body: SafeArea(
@@ -227,20 +227,23 @@ class _OnboardingView extends StatelessWidget {
           children: [
             PageView.builder(
               controller: controller,
-              itemCount: pages.length,
+              itemCount: pageCount,
               onPageChanged: onPageChanged,
               itemBuilder: (context, index) {
+                if (index == 0) {
+                  return _OnboardingIntroSlide(hostContext: context);
+                }
+                final asset = imageSlides[index - 1];
                 return SizedBox.expand(
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      // Crop bottom area to hide baked-in "Devam Et/Başla" in image.
                       ClipRect(
                         child: Align(
                           alignment: Alignment.topCenter,
                           heightFactor: 0.9,
                           child: Image.asset(
-                            pages[index],
+                            asset,
                             fit: BoxFit.cover,
                             width: double.infinity,
                             height: double.infinity,
@@ -322,7 +325,7 @@ class _OnboardingView extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: List.generate(
-                    pages.length,
+                    pageCount,
                     (i) => Container(
                       margin: const EdgeInsets.symmetric(horizontal: 4),
                       width: i == pageIndex ? 18 : 8,
@@ -346,3 +349,52 @@ class _OnboardingView extends StatelessWidget {
   }
 }
 
+/// İlk slayt: tam ekran PNG yerine marka + metin (AI stok görsel yok).
+class _OnboardingIntroSlide extends StatelessWidget {
+  const _OnboardingIntroSlide({required this.hostContext});
+
+  final BuildContext hostContext;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      height: double.infinity,
+      decoration: const BoxDecoration(gradient: AppTheme.pageGradient),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 20),
+        child: Column(
+          children: [
+            const Spacer(flex: 2),
+            SvgPicture.asset(
+              'assets/branding/logo_full_vector.svg',
+              width: 240,
+            ),
+            const Spacer(),
+            Text(
+              hostContext.t('onboarding1Title'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 26,
+                fontWeight: FontWeight.w800,
+                height: 1.25,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              hostContext.t('onboarding1Subtitle'),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.9),
+                fontSize: 16,
+                height: 1.45,
+              ),
+            ),
+            const Spacer(flex: 3),
+          ],
+        ),
+      ),
+    );
+  }
+}

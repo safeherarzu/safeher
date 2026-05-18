@@ -82,12 +82,12 @@ class GeocodingService {
     final out = <String>{q};
     final lower = q.toLowerCase();
     if (lower.contains('mahallesi')) {
-      out.add(q.replaceAll(RegExp(r'(?i)mahallesi'), 'Mah.'));
-      out.add(q.replaceAll(RegExp(r'(?i)mahallesi'), '').trim());
+      out.add(q.replaceAll(RegExp(r'mahallesi', caseSensitive: false), 'Mah.'));
+      out.add(q.replaceAll(RegExp(r'mahallesi', caseSensitive: false), '').trim());
     }
     if (lower.contains(' mah.')) {
-      out.add(q.replaceAll(RegExp(r'(?i)\smah\.'), ' Mahallesi'));
-      out.add(q.replaceAll(RegExp(r'(?i)\smah\.'), '').trim());
+      out.add(q.replaceAll(RegExp(r'\smah\.', caseSensitive: false), ' Mahallesi'));
+      out.add(q.replaceAll(RegExp(r'\smah\.', caseSensitive: false), '').trim());
     }
     return out.where((e) => e.isNotEmpty).toList();
   }

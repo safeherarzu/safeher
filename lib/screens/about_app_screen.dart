@@ -45,9 +45,9 @@ class AboutAppScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Version',
-                      style: TextStyle(
+                    Text(
+                      context.t('aboutVersionTitle'),
+                      style: const TextStyle(
                         color: Colors.white,
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
@@ -69,35 +69,6 @@ class AboutAppScreen extends StatelessWidget {
                 child: Text(
                   context.t('aboutPrivacy'),
                   style: TextStyle(color: Colors.white.withValues(alpha: 0.85)),
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Güvenlik ve Destek',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'SafeHer resmi acil servis hizmeti değildir ve acil durumda 112 gibi yetkili kurumların yerine geçmez. Topluluk işaretleri bilgilendirme amaçlıdır; yanlış veya uygunsuz işaretleri harita üzerinden şikayet edebilirsin.',
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.85)),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      'Destek: arzu@safeherapp.com\nSupport URL: https://safeherapp.com/support.php',
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.85)),
-                    ),
-                  ],
                 ),
               ),
             ),

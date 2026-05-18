@@ -1,19 +1,21 @@
 import 'package:flutter/material.dart';
 
 class AppTheme {
-  static const Color brandPurple = Color(0xFF6F42E8);
+  /// Ana marka moru — arka planla uyumlu, biraz daha yumuşak lila-menekşe.
+  static const Color brandPurple = Color(0xFF8B78D8);
   static const Color brandPink = Color(0xFFFF4DB8);
   static const Color brandBlue = Color(0xFF3D8DFF);
-  static const Color bgDark = Color(0xFF1E1038);
+  static const Color bgDark = Color(0xFF352F4A);
 
+  /// Uygulama geneli: önceki koyu neon mor yerine daha soft, tozlu lila geçişi.
   static const LinearGradient pageGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
     colors: [
-      Color(0xFF2B1654),
-      Color(0xFF5C2FA8),
-      Color(0xFF9B3CCF),
-      Color(0xFFE45EC4),
+      Color(0xFF4A4268),
+      Color(0xFF7A6DA8),
+      Color(0xFFB0A0D8),
+      Color(0xFFD8CCEF),
     ],
   );
 
