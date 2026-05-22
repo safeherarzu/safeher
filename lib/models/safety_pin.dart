@@ -36,8 +36,16 @@ class SafetyPin {
       tags: (data['tags'] as List<dynamic>? ?? const []).cast<String>(),
       likes: (data['likes'] as num?)?.toInt() ?? 0,
       dislikes: (data['dislikes'] as num?)?.toInt() ?? 0,
-      ownerUid: data['userId'] as String?,
+      ownerUid: _readOwnerUid(data),
     );
+  }
+
+  static String? _readOwnerUid(Map<String, dynamic> data) {
+    for (final key in ['userId', 'user_id', 'ownerId', 'uid', 'firebase_uid']) {
+      final v = data[key];
+      if (v is String && v.isNotEmpty) return v;
+    }
+    return null;
   }
 
   Map<String, dynamic> toFirestore() {

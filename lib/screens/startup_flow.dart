@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../l10n/app_strings.dart';
+import '../services/app_update_service.dart';
 import '../theme/app_theme.dart';
 import 'auth_screen.dart';
 import 'main_shell.dart';
@@ -23,6 +24,7 @@ class _StartupFlowState extends State<StartupFlow> {
   bool _showSplash = true;
   bool _seenOnboarding = false;
   bool _kvkkAccepted = false;
+  bool _updateCheckScheduled = false;
 
   final PageController _pageController = PageController();
   int _pageIndex = 0;
@@ -67,8 +69,19 @@ class _StartupFlowState extends State<StartupFlow> {
     setState(() => _kvkkAccepted = true);
   }
 
+  void _scheduleUpdateCheck(BuildContext context) {
+    if (_updateCheckScheduled) return;
+    _updateCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppUpdateService.instance.maybeShowUpdateDialog(context);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (!_showSplash) {
+      _scheduleUpdateCheck(context);
+    }
     if (_showSplash) return const _SplashView();
     if (!_kvkkAccepted) return _KvkkConsentView(onAccept: _acceptKvkk);
     if (_seenOnboarding) return const _AuthGateView();

@@ -4,6 +4,19 @@ import 'package:geocoding/geocoding.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
 
+/// Adres arama önerisi (Nominatim / geocoder).
+class AddressSuggestion {
+  const AddressSuggestion({
+    required this.title,
+    required this.latLng,
+    this.subtitle,
+  });
+
+  final String title;
+  final String? subtitle;
+  final LatLng latLng;
+}
+
 class GeocodingService {
   Future<LatLng> geocodeAddress(
     String address, {
@@ -63,6 +76,44 @@ class GeocodingService {
     throw StateError('Adres bulunamadı.');
   }
 
+  /// Yazarken adres önerileri (min 2 karakter).
+  Future<List<AddressSuggestion>> searchAddressSuggestions(
+    String query, {
+    int limit = 8,
+    String? localityHint,
+    String? adminHint,
+  }) async {
+    final q = query.trim();
+    if (q.length < 2) return const [];
+
+    final hintParts = <String>[
+      if ((localityHint ?? '').trim().isNotEmpty) localityHint!.trim(),
+      if ((adminHint ?? '').trim().isNotEmpty) adminHint!.trim(),
+    ];
+    final hinted = hintParts.isEmpty ? q : '$q, ${hintParts.join(', ')}';
+
+    final fromNominatim = await _nominatimSuggestions(hinted, limit: limit);
+    if (fromNominatim.isNotEmpty) return fromNominatim;
+
+    if (hinted != q) {
+      final retry = await _nominatimSuggestions(q, limit: limit);
+      if (retry.isNotEmpty) return retry;
+    }
+
+    final city = _directCityFallback(q);
+    if (city != null) {
+      return [
+        AddressSuggestion(
+          title: q,
+          subtitle: 'Türkiye',
+          latLng: city,
+        ),
+      ];
+    }
+
+    return const [];
+  }
+
   LatLng? _directCityFallback(String query) {
     final n = _normalizeTurkish(query).toLowerCase();
     if (n == 'izmir' || n.contains('izmir')) {
@@ -92,6 +143,78 @@ class GeocodingService {
     return out.where((e) => e.isNotEmpty).toList();
   }
 
+  Future<List<AddressSuggestion>> _nominatimSuggestions(
+    String query, {
+    required int limit,
+  }) async {
+    try {
+      final uri = Uri.parse(
+        'https://nominatim.openstreetmap.org/search'
+            '?format=jsonv2'
+            '&limit=$limit'
+            '&countrycodes=tr'
+            '&addressdetails=1'
+            '&q=${Uri.encodeQueryComponent(query)}',
+      );
+      final res = await http.get(
+        uri,
+        headers: const {
+          'User-Agent': 'SafeHerApp/1.0 (support: arzu@safeherapp.com)',
+          'Accept': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 12));
+      if (res.statusCode != 200) return const [];
+
+      final arr = jsonDecode(res.body) as List<dynamic>;
+      final out = <AddressSuggestion>[];
+      for (final raw in arr) {
+        if (raw is! Map<String, dynamic>) continue;
+        final lat = double.tryParse((raw['lat'] ?? '').toString());
+        final lon = double.tryParse((raw['lon'] ?? '').toString());
+        if (lat == null || lon == null) continue;
+
+        final display = (raw['display_name'] ?? '').toString().trim();
+        if (display.isEmpty) continue;
+
+        final name = (raw['name'] ?? '').toString().trim();
+        final address = raw['address'];
+        String? subtitle;
+        if (address is Map<String, dynamic>) {
+          final parts = <String>[
+            if (address['suburb'] != null) '${address['suburb']}',
+            if (address['city'] != null) '${address['city']}',
+            if (address['state'] != null) '${address['state']}',
+          ].where((e) => e.isNotEmpty).toList();
+          if (parts.isNotEmpty) subtitle = parts.join(', ');
+        }
+
+        out.add(
+          AddressSuggestion(
+            title: name.isNotEmpty ? name : _shortDisplayName(display),
+            subtitle: subtitle ?? _longDisplaySubtitle(display),
+            latLng: LatLng(lat, lon),
+          ),
+        );
+      }
+      return out;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  String _shortDisplayName(String display) {
+    final parts = display.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    if (parts.isEmpty) return display;
+    if (parts.length <= 2) return parts.join(', ');
+    return '${parts[0]}, ${parts[1]}';
+  }
+
+  String? _longDisplaySubtitle(String display) {
+    final parts = display.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    if (parts.length <= 2) return null;
+    return parts.skip(2).take(3).join(', ');
+  }
+
   Future<LatLng?> _fromNominatim(String query) async {
     try {
       final uri = Uri.parse(
@@ -104,10 +227,10 @@ class GeocodingService {
       final res = await http.get(
         uri,
         headers: const {
-          'User-Agent': 'SafeHerApp/1.0',
+          'User-Agent': 'SafeHerApp/1.0 (support: arzu@safeherapp.com)',
           'Accept': 'application/json',
         },
-      );
+      ).timeout(const Duration(seconds: 12));
       if (res.statusCode != 200) return null;
       final arr = jsonDecode(res.body) as List<dynamic>;
       if (arr.isEmpty) return null;

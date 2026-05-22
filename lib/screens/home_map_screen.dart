@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -8,6 +9,7 @@ import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../data/pins_repository.dart';
@@ -82,6 +84,8 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   bool _myLocationEnabled = false;
   final List<SafetyPin> _offlinePins = [];
   int _offlineId = 0;
+  static const _ownPinIdsPrefsKey = 'own_location_pin_ids';
+  Set<String> _ownPinIds = {};
   DateTime? _lastPinCreatedAt;
   Set<Marker> _busStopMarkers = <Marker>{};
   Set<Marker> _healthMarkers = <Marker>{};
@@ -110,7 +114,35 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   void initState() {
     super.initState();
     widget.mapPinIntentListenable.addListener(_mapPinIntentListener);
+    _loadOwnPinIds();
     _initUserLocation();
+  }
+
+  Future<void> _loadOwnPinIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getStringList(_ownPinIdsPrefsKey) ?? [];
+    if (!mounted) return;
+    setState(() => _ownPinIds = stored.toSet());
+  }
+
+  Future<void> _rememberOwnPinId(String pinId) async {
+    if (pinId.isEmpty) return;
+    _ownPinIds.add(pinId);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_ownPinIdsPrefsKey, _ownPinIds.toList());
+  }
+
+  Future<void> _forgetOwnPinId(String pinId) async {
+    _ownPinIds.remove(pinId);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_ownPinIdsPrefsKey, _ownPinIds.toList());
+  }
+
+  bool _canDeletePin(SafetyPin pin, String? uid) {
+    if (_isOfflinePin(pin)) return true;
+    if (uid == null) return false;
+    if (pin.ownerUid == uid) return true;
+    return _ownPinIds.contains(pin.id);
   }
 
   void _onMapPinIntentFromProfile() {
@@ -1146,12 +1178,13 @@ out center $outLimit;
                             : () async {
                             final safe = isSafe!;
                             try {
-                              await _pinsRepository.addPin(
+                              final newId = await _pinsRepository.addPin(
                                 lat: position.latitude,
                                 lng: position.longitude,
                                 isSafe: safe,
                                 tags: selectedTags.toList(),
                               );
+                              await _rememberOwnPinId(newId);
                             } catch (e) {
                               // Fallback: if Firestore write fails, keep pin locally
                               // so user can still continue using the map.
@@ -1222,8 +1255,7 @@ out center $outLimit;
     int likes = pin.likes;
     int dislikes = pin.dislikes;
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    final canDelete =
-        _isOfflinePin(pin) || (uid != null && pin.ownerUid != null && pin.ownerUid == uid);
+    final canDelete = _canDeletePin(pin, uid);
 
     await showModalBottomSheet<void>(
       context: context,
@@ -1411,55 +1443,100 @@ out center $outLimit;
                       ),
                     ),
                     const SizedBox(height: 16),
-                    if (canDelete)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: ElevatedButton(
-                        style:
-                            ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                        onPressed: () async {
-                          if (_isOfflinePin(pin)) {
-                            Navigator.pop(sheetContext);
-                            if (mounted) {
-                              setState(() {
-                                _offlinePins.removeWhere((p) => p.id == pin.id);
-                              });
-                            }
-                            return;
-                          }
-                          try {
-                            await _pinsRepository.deletePin(pin.id);
-                            if (!sheetContext.mounted) return;
-                            Navigator.pop(sheetContext);
-                            if (mounted) setState(() {});
-                          } catch (e) {
-                            if (!sheetContext.mounted) return;
-                            ScaffoldMessenger.of(sheetContext).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  'Silinemedi. Sadece kendi eklediğin işaretleri '
-                                  'silebilirsin. ($e)',
-                                ),
+                    if (canDelete) ...[
+                      const SizedBox(height: 4),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.red.shade800,
+                            side: BorderSide(color: Colors.red.shade400, width: 1.5),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                          icon: const Icon(Icons.delete_outline),
+                          label: Text(sheetContext.t('deletePinButton')),
+                          onPressed: () async {
+                            final ok = await showDialog<bool>(
+                              context: sheetContext,
+                              builder: (dCtx) => AlertDialog(
+                                title: Text(sheetContext.t('deletePinConfirmTitle')),
+                                content: Text(sheetContext.t('deletePinConfirmBody')),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () => Navigator.pop(dCtx, false),
+                                    child: Text(sheetContext.t('deletePinCancel')),
+                                  ),
+                                  FilledButton(
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: Colors.red.shade700,
+                                    ),
+                                    onPressed: () => Navigator.pop(dCtx, true),
+                                    child: Text(sheetContext.t('deletePinConfirm')),
+                                  ),
+                                ],
                               ),
                             );
-                          }
-                        },
-                        child: const Text('Sil'),
-                      ),
-                    )
-                  else
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        'Bu işareti yalnızca ekleyen kullanıcı silebilir.',
-                        style: TextStyle(
-                          color: Colors.grey.shade900,
-                          fontSize: 13,
-                          height: 1.4,
-                          fontWeight: FontWeight.w600,
+                            if (ok != true) return;
+
+                            if (_isOfflinePin(pin)) {
+                              await _forgetOwnPinId(pin.id);
+                              if (!sheetContext.mounted) return;
+                              Navigator.pop(sheetContext);
+                              if (mounted) {
+                                setState(() {
+                                  _offlinePins.removeWhere((p) => p.id == pin.id);
+                                });
+                              }
+                              if (mounted) {
+                                ScaffoldMessenger.of(sheetContext).showSnackBar(
+                                  SnackBar(
+                                    content: Text(sheetContext.t('deletePinSuccess')),
+                                  ),
+                                );
+                              }
+                              return;
+                            }
+                            try {
+                              await _pinsRepository.deletePin(pin.id);
+                              await _forgetOwnPinId(pin.id);
+                              if (!sheetContext.mounted) return;
+                              Navigator.pop(sheetContext);
+                              if (mounted) {
+                                setState(() {});
+                                ScaffoldMessenger.of(sheetContext).showSnackBar(
+                                  SnackBar(
+                                    content: Text(sheetContext.t('deletePinSuccess')),
+                                  ),
+                                );
+                              }
+                            } catch (e) {
+                              if (!sheetContext.mounted) return;
+                              final msg = e.toString().contains('PERMISSION_DENIED') ||
+                                      e.toString().contains('insufficient permissions')
+                                  ? sheetContext.t('deletePinOnlyOwner')
+                                  : sheetContext.tReplace('deletePinFailed', {
+                                      'error': e.toString(),
+                                    });
+                              ScaffoldMessenger.of(sheetContext).showSnackBar(
+                                SnackBar(content: Text(msg)),
+                              );
+                            }
+                          },
                         ),
                       ),
-                    ),
+                    ] else
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          sheetContext.t('deletePinOnlyOwner'),
+                          style: TextStyle(
+                            color: Colors.grey.shade900,
+                            fontSize: 13,
+                            height: 1.4,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
                 ],
               ),
             );
@@ -1481,54 +1558,20 @@ out center $outLimit;
       isScrollControlled: true,
       backgroundColor: Colors.white,
       useSafeArea: true,
-      builder: (ctx) {
-        final pad = MediaQuery.paddingOf(ctx).bottom;
-        final viewInset = MediaQuery.viewInsetsOf(ctx).bottom;
-        return Padding(
-          padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + pad + viewInset),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                ctx.t('routePlanSheetTitle'),
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                  color: Color(0xFF241247),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                ctx.t('routePlanSheetBody'),
-                style: TextStyle(
-                  color: Colors.grey.shade800,
-                  height: 1.35,
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _routeDestinationController,
-                textInputAction: TextInputAction.done,
-                decoration: InputDecoration(
-                  labelText: ctx.t('routePlanDestinationHint'),
-                  border: const OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 18),
-              FilledButton(
-                onPressed: () async {
-                  final q = _routeDestinationController.text.trim();
-                  if (q.isEmpty) return;
-                  Navigator.of(ctx).pop();
-                  await _runRouteSafetyAnalysis(pins, q);
-                },
-                child: Text(ctx.t('routePlanAnalyze')),
-              ),
-            ],
-          ),
-        );
-      },
+      builder: (ctx) => _RoutePlannerSheet(
+        controller: _routeDestinationController,
+        geocodingService: _geocodingService,
+        mapContextTarget: _mapContextTarget,
+        pins: pins,
+        onAnalyze: (query, picked) {
+          Navigator.of(ctx).pop();
+          _runRouteSafetyAnalysis(
+            pins,
+            query,
+            destinationLatLng: picked,
+          );
+        },
+      ),
     );
   }
 
@@ -1561,8 +1604,9 @@ out center $outLimit;
 
   Future<void> _runRouteSafetyAnalysis(
     List<SafetyPin> pins,
-    String destinationQuery,
-  ) async {
+    String destinationQuery, {
+    LatLng? destinationLatLng,
+  }) async {
     if (!mounted) return;
     showDialog<void>(
       context: context,
@@ -1591,7 +1635,8 @@ out center $outLimit;
         return;
       }
 
-      final dest = await _geocodeWithFallback(destinationQuery);
+      final dest =
+          destinationLatLng ?? await _geocodeWithFallback(destinationQuery);
       if (dest == null) {
         closeLoader();
         if (!mounted) return;
@@ -2016,5 +2061,255 @@ class _TaxiOption {
     required this.appUri,
     this.webUri,
   });
+}
+
+/// Rota planlayıcı: yazarken altta adres önerileri.
+class _RoutePlannerSheet extends StatefulWidget {
+  const _RoutePlannerSheet({
+    required this.controller,
+    required this.geocodingService,
+    required this.mapContextTarget,
+    required this.pins,
+    required this.onAnalyze,
+  });
+
+  final TextEditingController controller;
+  final GeocodingService geocodingService;
+  final LatLng? mapContextTarget;
+  final List<SafetyPin> pins;
+  final void Function(String query, LatLng? pickedLatLng) onAnalyze;
+
+  @override
+  State<_RoutePlannerSheet> createState() => _RoutePlannerSheetState();
+}
+
+class _RoutePlannerSheetState extends State<_RoutePlannerSheet> {
+  Timer? _debounce;
+  List<AddressSuggestion> _suggestions = [];
+  bool _loading = false;
+  LatLng? _pickedLatLng;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onTextChanged);
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    widget.controller.removeListener(_onTextChanged);
+    super.dispose();
+  }
+
+  void _onTextChanged() {
+    setState(() => _pickedLatLng = null);
+    _scheduleSearch(widget.controller.text);
+  }
+
+  void _scheduleSearch(String raw) {
+    _debounce?.cancel();
+    final q = raw.trim();
+    if (q.length < 2) {
+      setState(() {
+        _loading = false;
+        _suggestions = [];
+      });
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 450), () => _fetch(q));
+  }
+
+  Future<void> _fetch(String q) async {
+    setState(() => _loading = true);
+    String? localityHint;
+    String? adminHint;
+    final target = widget.mapContextTarget;
+    if (target != null) {
+      try {
+        final places = await placemarkFromCoordinates(
+          target.latitude,
+          target.longitude,
+        );
+        if (places.isNotEmpty) {
+          final p = places.first;
+          localityHint = p.subAdministrativeArea ?? p.locality;
+          adminHint = p.administrativeArea;
+        }
+      } catch (_) {}
+    }
+
+    final list = await widget.geocodingService.searchAddressSuggestions(
+      q,
+      localityHint: localityHint,
+      adminHint: adminHint,
+    );
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _suggestions = list;
+    });
+  }
+
+  void _pick(AddressSuggestion s) {
+    widget.controller.text = s.title;
+    _pickedLatLng = s.latLng;
+    setState(() => _suggestions = []);
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pad = MediaQuery.paddingOf(context).bottom;
+    final viewInset = MediaQuery.viewInsetsOf(context).bottom;
+    final showList = _loading || _suggestions.isNotEmpty;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + pad + viewInset),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            context.t('routePlanSheetTitle'),
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF241247),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            context.t('routePlanSheetBody'),
+            style: TextStyle(
+              color: Colors.grey.shade800,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: widget.controller,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (v) {
+              final q = v.trim();
+              if (q.isEmpty) return;
+              widget.onAnalyze(q, _pickedLatLng);
+            },
+            decoration: InputDecoration(
+              labelText: context.t('routePlanDestinationHint'),
+              border: const OutlineInputBorder(),
+              suffixIcon: _loading
+                  ? const Padding(
+                      padding: EdgeInsets.all(12),
+                      child: SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : (widget.controller.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear),
+                          onPressed: () {
+                            widget.controller.clear();
+                            setState(() {
+                              _suggestions = [];
+                              _pickedLatLng = null;
+                            });
+                          },
+                        )
+                      : null),
+            ),
+          ),
+          if (showList) ...[
+            const SizedBox(height: 8),
+            Material(
+              elevation: 2,
+              borderRadius: BorderRadius.circular(12),
+              color: const Color(0xFFF8F7FC),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 220),
+                child: _loading && _suggestions.isEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          children: [
+                            const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              context.t('routePlanSuggestionsLoading'),
+                              style: TextStyle(color: Colors.grey.shade800),
+                            ),
+                          ],
+                        ),
+                      )
+                    : (_suggestions.isEmpty
+                        ? Padding(
+                            padding: const EdgeInsets.all(14),
+                            child: Text(
+                              context.t('routePlanSuggestionsEmpty'),
+                              style: TextStyle(
+                                color: Colors.grey.shade700,
+                                fontSize: 13,
+                              ),
+                            ),
+                          )
+                        : ListView.separated(
+                            shrinkWrap: true,
+                            padding: EdgeInsets.zero,
+                            itemCount: _suggestions.length,
+                            separatorBuilder: (_, _) => Divider(
+                              height: 1,
+                              color: Colors.grey.shade300,
+                            ),
+                            itemBuilder: (context, i) {
+                              final s = _suggestions[i];
+                              return ListTile(
+                                dense: true,
+                                leading: Icon(
+                                  Icons.place_outlined,
+                                  color: Colors.grey.shade700,
+                                ),
+                                title: Text(
+                                  s.title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                                subtitle: s.subtitle == null
+                                    ? null
+                                    : Text(
+                                        s.subtitle!,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                onTap: () => _pick(s),
+                              );
+                            },
+                          )),
+              ),
+            ),
+          ],
+          const SizedBox(height: 18),
+          FilledButton(
+            onPressed: () {
+              final q = widget.controller.text.trim();
+              if (q.isEmpty) return;
+              widget.onAnalyze(q, _pickedLatLng);
+            },
+            child: Text(context.t('routePlanAnalyze')),
+          ),
+        ],
+      ),
+    );
+  }
 }
 

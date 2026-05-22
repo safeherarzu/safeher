@@ -37,6 +37,11 @@ class AppStrings {
       'aboutText':
           'SafeHer, kullanıcıların güvenli ve güvensiz bölgeleri anonim olarak işaretlemesine ve acil durumlarda hızlı SOS akışıyla konum paylaşmasına yardımcı olur.',
       'releaseBeta': 'Dağıtım: App Store ve Google Play üzerinden.',
+      'updateAvailableTitle': 'Güncelleme var',
+      'updateAvailableBody':
+          'SafeHer\'ın yeni sürümü ({version}) yayında. En iyi deneyim için App Store veya Google Play\'den güncelleyin.',
+      'updateNow': 'Güncelle',
+      'updateLater': 'Sonra',
       'aboutPrivacy': 'Gizlilik ve KVKK metinlerini Hesabım ve başlangıç onay ekranında inceleyebilirsin.',
       'language': 'Dil',
       'languageSystem': 'Sistem dili',
@@ -86,6 +91,8 @@ class AppStrings {
       'routePlanSheetBody':
           'Bulunduğun konum (veya haritayı ortaladığın nokta) ile hedef arasında düz hat üzerinde güvensiz işaretleri tararız. Gerçek sürüş yolundan farklı olabilir; yine de dikkat çekmek için uygundur.',
       'routePlanDestinationHint': 'Hedef adres (örn. Kadıköy İskelesi)',
+      'routePlanSuggestionsLoading': 'Adresler aranıyor…',
+      'routePlanSuggestionsEmpty': 'Öneri bulunamadı. Yazmaya devam edin veya farklı bir ifade deneyin.',
       'routePlanAnalyze': 'Güvensiz bölgeleri kontrol et',
       'routePlanClose': 'Kapat',
       'routePlanClearRoute': 'Rotayı haritadan kaldır',
@@ -109,6 +116,15 @@ class AppStrings {
       'mapFilterClear': 'Filtreyi kaldır',
       'mapFilterEmpty': 'Bu görünümde gösterilecek pin yok.',
       'mapPinTagsEmpty': 'Etiket yok',
+      'deletePinButton': 'İşaretimi sil',
+      'deletePinConfirmTitle': 'İşareti sil?',
+      'deletePinConfirmBody':
+          'Bu işaret haritadan kaldırılır. Bu işlem geri alınamaz.',
+      'deletePinCancel': 'Vazgeç',
+      'deletePinConfirm': 'Sil',
+      'deletePinSuccess': 'İşaret silindi.',
+      'deletePinFailed': 'Silinemedi: {error}',
+      'deletePinOnlyOwner': 'Bu işareti yalnızca ekleyen kullanıcı silebilir.',
     },
     'en': {
       'map': 'Map',
@@ -145,6 +161,11 @@ class AppStrings {
       'aboutText':
           'SafeHer helps users mark safe and unsafe areas anonymously and share location quickly via SOS in emergencies.',
       'releaseBeta': 'Available on the App Store and Google Play.',
+      'updateAvailableTitle': 'Update available',
+      'updateAvailableBody':
+          'A new version of SafeHer ({version}) is available. Please update from the App Store or Google Play.',
+      'updateNow': 'Update',
+      'updateLater': 'Later',
       'aboutPrivacy': 'You can review privacy and KVKK texts from Account and startup consent screens.',
       'language': 'Language',
       'languageSystem': 'System language',
@@ -194,6 +215,8 @@ class AppStrings {
       'routePlanSheetBody':
           'We scan unsafe community pins along a straight line from your location (or the map center) to the destination. This is not turn-by-turn navigation, but it highlights areas to watch.',
       'routePlanDestinationHint': 'Destination (e.g. city landmark)',
+      'routePlanSuggestionsLoading': 'Searching addresses…',
+      'routePlanSuggestionsEmpty': 'No suggestions. Keep typing or try another phrase.',
       'routePlanAnalyze': 'Check unsafe areas',
       'routePlanClose': 'Close',
       'routePlanClearRoute': 'Remove route from map',
@@ -217,6 +240,15 @@ class AppStrings {
       'mapFilterClear': 'Clear filter',
       'mapFilterEmpty': 'No pins to show in this view.',
       'mapPinTagsEmpty': 'No tags',
+      'deletePinButton': 'Delete my pin',
+      'deletePinConfirmTitle': 'Delete this pin?',
+      'deletePinConfirmBody':
+          'This pin will be removed from the map. This cannot be undone.',
+      'deletePinCancel': 'Cancel',
+      'deletePinConfirm': 'Delete',
+      'deletePinSuccess': 'Pin deleted.',
+      'deletePinFailed': 'Could not delete: {error}',
+      'deletePinOnlyOwner': 'Only the user who added this pin can delete it.',
     },
   };
 
