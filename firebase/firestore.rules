@@ -46,6 +46,12 @@ service cloud.firestore {
         && resource.data.userId == request.auth.uid;
     }
 
+    // Mağaza güncelleme bildirimi (yalnızca okuma; yazma Firebase Console / admin).
+    match /app_config/{docId} {
+      allow read: if docId == 'store';
+      allow write: if false;
+    }
+
     // Basic report queue for moderation.
     match /reports/{reportId} {
       allow create: if isSignedIn()
