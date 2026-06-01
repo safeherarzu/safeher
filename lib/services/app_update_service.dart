@@ -6,11 +6,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../l10n/app_strings.dart';
 
-/// Mağaza / Firestore üzerinden sürüm kontrolü ve güncelleme diyaloğu.
+/// Mağaza / Firestore üzerinden sürüm kontrolü.
 class AppUpdateService {
   AppUpdateService._();
   static final AppUpdateService instance = AppUpdateService._();
@@ -18,24 +19,28 @@ class AppUpdateService {
   static const _bundleId = 'com.safeher.womensafety';
   static const _playStoreUrl =
       'https://play.google.com/store/apps/details?id=$_bundleId';
-
-  /// Firestore: `app_config/store` — yayın sonrası min sürümü buradan güncelleyebilirsiniz.
-  /// Örnek alanlar: min_version_ios, min_version_android, message_tr, message_en, force_update
   static const _firestoreDoc = 'app_config/store';
+  static const _bannerDismissPrefsKey = 'update_banner_dismissed_version';
 
-  Future<void> maybeShowUpdateDialog(BuildContext context) async {
-    if (kIsWeb) return;
+  /// Güncelleme varsa döner; yoksa null.
+  Future<AppUpdateOffer?> fetchAvailableUpdate() async {
+    if (kIsWeb) return null;
 
     try {
       final info = await PackageInfo.fromPlatform();
       final current = info.version;
       final update = await _resolveUpdateTarget();
-      if (update == null) return;
-      if (!_isOlder(current, update.version)) return;
-      if (!context.mounted) return;
+      if (update == null) return null;
+      if (!_isOlder(current, update.version)) return null;
 
-      await _showDialog(
-        context,
+      if (!update.forceUpdate) {
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.getString(_bannerDismissPrefsKey) == update.version) {
+          return null;
+        }
+      }
+
+      return AppUpdateOffer(
         storeVersion: update.version,
         storeUrl: update.storeUrl,
         message: update.message,
@@ -43,7 +48,36 @@ class AppUpdateService {
       );
     } catch (e, st) {
       debugPrint('AppUpdateService: $e\n$st');
+      return null;
     }
+  }
+
+  Future<void> openStore(AppUpdateOffer offer) async {
+    final uri = Uri.parse(offer.storeUrl);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  Future<void> dismissBanner(AppUpdateOffer offer) async {
+    if (offer.forceUpdate) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_bannerDismissPrefsKey, offer.storeVersion);
+  }
+
+  /// Zorunlu güncellemede tam ekran diyalog (banner yeterli değilse).
+  Future<void> maybeShowForceUpdateDialog(
+    BuildContext context,
+    AppUpdateOffer offer,
+  ) async {
+    if (!offer.forceUpdate || !context.mounted) return;
+    await _showDialog(
+      context,
+      storeVersion: offer.storeVersion,
+      storeUrl: offer.storeUrl,
+      message: offer.message,
+      forceUpdate: true,
+    );
   }
 
   Future<_UpdateTarget?> _resolveUpdateTarget() async {
@@ -111,7 +145,6 @@ class AppUpdateService {
   }
 
   Future<_UpdateTarget?> _fromPlayListing() async {
-    // Play Store resmi basit API vermez; Firestore yoksa yalnızca mağaza linki.
     return null;
   }
 
@@ -119,9 +152,7 @@ class AppUpdateService {
     final uri = Uri.parse(
       'https://itunes.apple.com/lookup?bundleId=$_bundleId&country=tr',
     );
-    final res = await http
-        .get(uri)
-        .timeout(const Duration(seconds: 12));
+    final res = await http.get(uri).timeout(const Duration(seconds: 12));
     if (res.statusCode != 200) return null;
     final json = jsonDecode(res.body) as Map<String, dynamic>;
     final results = json['results'] as List<dynamic>?;
@@ -134,9 +165,7 @@ class AppUpdateService {
     final uri = Uri.parse(
       'https://itunes.apple.com/lookup?bundleId=$_bundleId&country=tr',
     );
-    final res = await http
-        .get(uri)
-        .timeout(const Duration(seconds: 12));
+    final res = await http.get(uri).timeout(const Duration(seconds: 12));
     if (res.statusCode != 200) return null;
     final json = jsonDecode(res.body) as Map<String, dynamic>;
     final results = json['results'] as List<dynamic>?;
@@ -204,6 +233,20 @@ class AppUpdateService {
       },
     );
   }
+}
+
+class AppUpdateOffer {
+  const AppUpdateOffer({
+    required this.storeVersion,
+    required this.storeUrl,
+    this.message,
+    this.forceUpdate = false,
+  });
+
+  final String storeVersion;
+  final String storeUrl;
+  final String? message;
+  final bool forceUpdate;
 }
 
 class _UpdateTarget {

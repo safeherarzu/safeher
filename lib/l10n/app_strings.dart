@@ -42,6 +42,9 @@ class AppStrings {
           'SafeHer\'ın yeni sürümü ({version}) yayında. En iyi deneyim için App Store veya Google Play\'den güncelleyin.',
       'updateNow': 'Güncelle',
       'updateLater': 'Sonra',
+      'updateBannerTitle': 'Yeni sürüm mevcut',
+      'updateBannerSubtitle':
+          'SafeHer {version} yayında. Güncellemek için dokunun.',
       'aboutPrivacy': 'Gizlilik ve KVKK metinlerini Hesabım ve başlangıç onay ekranında inceleyebilirsin.',
       'language': 'Dil',
       'languageSystem': 'Sistem dili',
@@ -166,6 +169,9 @@ class AppStrings {
           'A new version of SafeHer ({version}) is available. Please update from the App Store or Google Play.',
       'updateNow': 'Update',
       'updateLater': 'Later',
+      'updateBannerTitle': 'Update available',
+      'updateBannerSubtitle':
+          'SafeHer {version} is available. Tap to update.',
       'aboutPrivacy': 'You can review privacy and KVKK texts from Account and startup consent screens.',
       'language': 'Language',
       'languageSystem': 'System language',

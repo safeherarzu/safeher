@@ -4,6 +4,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../l10n/app_strings.dart';
 import '../models/map_pin_visibility.dart';
+import '../services/app_update_service.dart';
+import '../widgets/app_update_banner.dart';
 import 'home_map_screen.dart';
 import 'profile_screen.dart';
 import 'sos_screen.dart';
@@ -18,6 +20,7 @@ class MainShell extends StatefulWidget {
 
 class _MainShellState extends State<MainShell> {
   int _index = 0;
+  AppUpdateOffer? _updateOffer;
 
   /// Profil → harita: hangi pinler vurgulansın (her atamada yeni [token] ile tetiklenir).
   final ValueNotifier<MapPinFilterIntent?> _mapPinIntent = ValueNotifier(null);
@@ -26,9 +29,41 @@ class _MainShellState extends State<MainShell> {
   final List<Widget?> _pages = [null, null, null];
 
   @override
+  void initState() {
+    super.initState();
+    _refreshUpdateOffer();
+  }
+
+  @override
   void dispose() {
     _mapPinIntent.dispose();
     super.dispose();
+  }
+
+  Future<void> _refreshUpdateOffer() async {
+    final offer = await AppUpdateService.instance.fetchAvailableUpdate();
+    if (!mounted) return;
+    setState(() => _updateOffer = offer);
+    if (offer != null && offer.forceUpdate) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        AppUpdateService.instance.maybeShowForceUpdateDialog(context, offer);
+      });
+    }
+  }
+
+  Future<void> _onUpdatePressed() async {
+    final offer = _updateOffer;
+    if (offer == null) return;
+    await AppUpdateService.instance.openStore(offer);
+  }
+
+  Future<void> _onDismissUpdateBanner() async {
+    final offer = _updateOffer;
+    if (offer == null) return;
+    await AppUpdateService.instance.dismissBanner(offer);
+    if (!mounted) return;
+    setState(() => _updateOffer = null);
   }
 
   void _openMapWithPinFilter(MapPinVisibilityFilter filter) {
@@ -58,18 +93,32 @@ class _MainShellState extends State<MainShell> {
     return Container(
       decoration: const BoxDecoration(gradient: AppTheme.pageGradient),
       child: Scaffold(
-        body: IndexedStack(
-          index: _index,
-          sizing: StackFit.expand,
+        body: Column(
           children: [
-            _tabSlot(
-              0,
-              () => HomeMapScreen(mapPinIntentListenable: _mapPinIntent),
-            ),
-            _tabSlot(1, () => SosScreen(visible: _index == 1)),
-            _tabSlot(
-              2,
-              () => ProfileScreen(onOpenMapWithPinFilter: _openMapWithPinFilter),
+            if (_updateOffer != null)
+              AppUpdateBanner(
+                offer: _updateOffer!,
+                onDismiss: _onDismissUpdateBanner,
+                onUpdate: _onUpdatePressed,
+              ),
+            Expanded(
+              child: IndexedStack(
+                index: _index,
+                sizing: StackFit.expand,
+                children: [
+                  _tabSlot(
+                    0,
+                    () => HomeMapScreen(mapPinIntentListenable: _mapPinIntent),
+                  ),
+                  _tabSlot(1, () => SosScreen(visible: _index == 1)),
+                  _tabSlot(
+                    2,
+                    () => ProfileScreen(
+                      onOpenMapWithPinFilter: _openMapWithPinFilter,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
