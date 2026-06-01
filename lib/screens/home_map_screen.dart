@@ -427,6 +427,59 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
         .replaceAll('Ü', 'U');
   }
 
+  void _setNearbyLoading({bool? bus, bool? hospitals, bool? pharmacies}) {
+    if (!mounted) return;
+    setState(() {
+      if (bus != null) _isFindingBusStops = bus;
+      if (hospitals != null) _isFindingHospitals = hospitals;
+      if (pharmacies != null) _isFindingPharmacies = pharmacies;
+    });
+  }
+
+  void _showNearbySearchSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.5,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Text(message)),
+            ],
+          ),
+          duration: const Duration(days: 1),
+        ),
+      );
+  }
+
+  void _hideNearbySearchSnack() {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+  }
+
+  Widget _nearbyActionIcon(bool loading, IconData icon) {
+    if (loading) {
+      return const SizedBox(
+        width: 20,
+        height: 20,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: Colors.white,
+        ),
+      );
+    }
+    return Icon(icon);
+  }
+
   Future<Position?> _tryGetCurrentPosition() async {
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -452,14 +505,15 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
 
   Future<void> _openNearbyBusStops() async {
     if (_isFindingBusStops) return;
-    _isFindingBusStops = true;
-    if (mounted) setState(() {});
+    _setNearbyLoading(bus: true);
+    _showNearbySearchSnack(context.t('searchingBuses'));
+    await Future<void>.delayed(Duration.zero);
 
     final target = await _resolveTargetForNearby();
     if (!mounted) return;
     if (target == null) {
-      _isFindingBusStops = false;
-      if (mounted) setState(() {});
+      _hideNearbySearchSnack();
+      _setNearbyLoading(bus: false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Konum alınamadı. Lütfen konum iznini ve GPS’i açın.'),
@@ -474,8 +528,8 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     if (!mounted) return;
 
     if (!result.requestOk) {
-      _isFindingBusStops = false;
-      if (mounted) setState(() {});
+      _hideNearbySearchSnack();
+      _setNearbyLoading(bus: false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -488,8 +542,8 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
 
     final nearby = result.items;
     if (nearby.isEmpty) {
-      _isFindingBusStops = false;
-      if (mounted) setState(() {});
+      _hideNearbySearchSnack();
+      _setNearbyLoading(bus: false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Yakında durak bulunamadı.')),
       );
@@ -515,8 +569,8 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     );
 
     if (!mounted) return;
-    _isFindingBusStops = false;
-    if (mounted) setState(() {});
+    _hideNearbySearchSnack();
+    _setNearbyLoading(bus: false);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('${nearby.length} durak haritada gösteriliyor.')),
     );
@@ -706,11 +760,15 @@ out center $outLimit;
 
   Future<void> _showNearbyHospitals() async {
     if (_isFindingHospitals) return;
-    _isFindingHospitals = true;
+    _setNearbyLoading(hospitals: true);
+    _showNearbySearchSnack(context.t('searchingHospitals'));
+    await Future<void>.delayed(Duration.zero);
+
     final target = await _resolveHealthSearchOrigin();
     if (!mounted) return;
     if (target == null) {
-      _isFindingHospitals = false;
+      _hideNearbySearchSnack();
+      _setNearbyLoading(hospitals: false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Konum alınamadı. Lütfen konum iznini ve GPS’i açın.'),
@@ -811,7 +869,8 @@ out center $outLimit;
 
     if (!mounted) return;
     if (combined.isEmpty) {
-      _isFindingHospitals = false;
+      _hideNearbySearchSnack();
+      _setNearbyLoading(hospitals: false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -824,6 +883,7 @@ out center $outLimit;
       return;
     }
 
+    _hideNearbySearchSnack();
     setState(() {
       _healthMarkers = {
         ..._healthMarkers.where(
@@ -846,24 +906,28 @@ out center $outLimit;
     await _mapController?.animateCamera(
       CameraUpdate.newLatLngZoom(LatLng(first.lat, first.lng), 14),
     );
-    _isFindingHospitals = false;
+    _setNearbyLoading(hospitals: false);
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('${combined.length} sağlık noktası haritada (en yakına göre) gösteriliyor.'),
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${combined.length} sağlık noktası haritada (en yakına göre) gösteriliyor.',
         ),
-      );
+      ),
+    );
   }
 
   Future<void> _showNearbyPharmacies() async {
     if (_isFindingPharmacies) return;
-    _isFindingPharmacies = true;
+    _setNearbyLoading(pharmacies: true);
+    _showNearbySearchSnack(context.t('searchingPharmacies'));
+    await Future<void>.delayed(Duration.zero);
+
     final target = await _resolveHealthSearchOrigin();
     if (!mounted) return;
     if (target == null) {
-      _isFindingPharmacies = false;
+      _hideNearbySearchSnack();
+      _setNearbyLoading(pharmacies: false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Konum alınamadı. Lütfen konum iznini ve GPS’i açın.'),
@@ -898,7 +962,8 @@ out center $outLimit;
     final pharmacies = _mergeByDistance(lat, lng, [batch.places], 12);
     if (!mounted) return;
     if (pharmacies.isEmpty) {
-      _isFindingPharmacies = false;
+      _hideNearbySearchSnack();
+      _setNearbyLoading(pharmacies: false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -911,6 +976,7 @@ out center $outLimit;
       return;
     }
 
+    _hideNearbySearchSnack();
     setState(() {
       _healthMarkers = {
         ..._healthMarkers.where(
@@ -933,15 +999,15 @@ out center $outLimit;
     await _mapController?.animateCamera(
       CameraUpdate.newLatLngZoom(LatLng(first.lat, first.lng), 14),
     );
-    _isFindingPharmacies = false;
+    _setNearbyLoading(pharmacies: false);
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text('${pharmacies.length} eczane haritada (en yakınlar) gösteriliyor.'),
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${pharmacies.length} eczane haritada (en yakınlar) gösteriliyor.',
         ),
-      );
+      ),
+    );
   }
 
   Future<void> _openTaxiAction() async {
@@ -1969,11 +2035,14 @@ out center $outLimit;
                           ),
                           onPressed:
                               _isFindingBusStops ? null : _openNearbyBusStops,
-                          icon: const Icon(Icons.directions_bus),
+                          icon: _nearbyActionIcon(
+                            _isFindingBusStops,
+                            Icons.directions_bus,
+                          ),
                           label: Text(
                             _isFindingBusStops
-                                ? 'Duraklar aranıyor...'
-                                : 'Yakındaki Otobüsler',
+                                ? context.t('searchingBuses')
+                                : context.t('nearbyBuses'),
                           ),
                         ),
                       ),
@@ -2007,11 +2076,14 @@ out center $outLimit;
                             backgroundColor: Colors.white.withValues(alpha: 0.08),
                           ),
                           onPressed: _isFindingHospitals ? null : _showNearbyHospitals,
-                          icon: const Icon(Icons.local_hospital),
+                          icon: _nearbyActionIcon(
+                            _isFindingHospitals,
+                            Icons.local_hospital,
+                          ),
                           label: Text(
                             _isFindingHospitals
-                                ? 'Hastaneler aranıyor...'
-                                : 'Yakındaki Hastaneler',
+                                ? context.t('searchingHospitals')
+                                : context.t('nearbyHospitals'),
                           ),
                         ),
                       ),
@@ -2026,11 +2098,14 @@ out center $outLimit;
                             backgroundColor: Colors.white.withValues(alpha: 0.08),
                           ),
                           onPressed: _isFindingPharmacies ? null : _showNearbyPharmacies,
-                          icon: const Icon(Icons.local_pharmacy),
+                          icon: _nearbyActionIcon(
+                            _isFindingPharmacies,
+                            Icons.local_pharmacy,
+                          ),
                           label: Text(
                             _isFindingPharmacies
-                                ? 'Eczaneler aranıyor...'
-                                : 'Yakındaki Eczaneler',
+                                ? context.t('searchingPharmacies')
+                                : context.t('nearbyPharmacies'),
                           ),
                         ),
                       ),
