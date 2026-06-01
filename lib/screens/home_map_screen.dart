@@ -54,25 +54,69 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     'Issız',
   ];
 
-  /// Ana Overpass sık yoğun; kısa HTTP zaman aşımı veya tek endpoint boş sonuç veriyordu.
+  /// Overpass sık 406/timeout verir; User-Agent + yedek sunucular gerekli.
   static const _overpassInterpreterUrls = <String>[
     'https://overpass-api.de/api/interpreter',
     'https://lz4.overpass-api.de/api/interpreter',
     'https://z.overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
   ];
 
+  static const _overpassUserAgent =
+      'SafeHer/1.0.3 (https://safeherapp.com; support@safeherapp.com)';
+
   static const Duration _overpassHttpTimeout = Duration(seconds: 45);
+
+  static final Map<String, String> _overpassHeaders = {
+    'User-Agent': _overpassUserAgent,
+    'Accept': 'application/json',
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
 
   Future<http.Response?> _postOverpass(String query) async {
     for (final url in _overpassInterpreterUrls) {
       try {
         final res = await http
-            .post(Uri.parse(url), body: {'data': query})
+            .post(
+              Uri.parse(url),
+              headers: _overpassHeaders,
+              body: {'data': query},
+            )
             .timeout(_overpassHttpTimeout);
-        if (res.statusCode == 200) return res;
+        if (res.statusCode == 200 &&
+            !res.body.contains('<html') &&
+            !res.body.contains('<!DOCTYPE')) {
+          return res;
+        }
       } catch (_) {}
     }
     return null;
+  }
+
+  List<_BusStop> _parseOverpassElements(String body) {
+    try {
+      final map = jsonDecode(body) as Map<String, dynamic>;
+      final elements = (map['elements'] as List<dynamic>? ?? const []);
+      return elements
+          .map((e) {
+            final m = e as Map<String, dynamic>;
+            final tags = (m['tags'] as Map<String, dynamic>? ?? const {});
+            final center = m['center'] as Map<String, dynamic>?;
+            return _BusStop(
+              lat: ((m['lat'] as num?)?.toDouble() ??
+                  (center?['lat'] as num?)?.toDouble() ??
+                  0),
+              lng: ((m['lon'] as num?)?.toDouble() ??
+                  (center?['lon'] as num?)?.toDouble() ??
+                  0),
+              name: (tags['name'] as String?) ?? '',
+            );
+          })
+          .where((e) => e.lat != 0 && e.lng != 0)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
   }
 
   final TextEditingController _searchController = TextEditingController();
@@ -105,6 +149,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
         return !pin.isSafe;
     }
   }
+  bool _isFindingBusStops = false;
   bool _isFindingHospitals = false;
   bool _isFindingPharmacies = false;
   bool _didAutoCenterOnLaunch = false;
@@ -397,17 +442,24 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       }
 
       return Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.low),
-      ).timeout(const Duration(seconds: 10));
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.medium),
+      ).timeout(const Duration(seconds: 15));
     } catch (_) {
       return null;
     }
   }
 
   Future<void> _openNearbyBusStops() async {
+    if (_isFindingBusStops) return;
+    _isFindingBusStops = true;
+    if (mounted) setState(() {});
+
     final target = await _resolveTargetForNearby();
     if (!mounted) return;
     if (target == null) {
+      _isFindingBusStops = false;
+      if (mounted) setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Konum alınamadı. Lütfen konum iznini ve GPS’i açın.'),
@@ -418,10 +470,26 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
 
     final lat = target.latitude;
     final lng = target.longitude;
-    final nearby = await _fetchNearbyBusStops(lat, lng);
+    final result = await _fetchNearbyBusStops(lat, lng);
     if (!mounted) return;
 
+    if (!result.requestOk) {
+      _isFindingBusStops = false;
+      if (mounted) setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Durak verisi alınamadı. İnternet bağlantınızı kontrol edip tekrar deneyin.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final nearby = result.items;
     if (nearby.isEmpty) {
+      _isFindingBusStops = false;
+      if (mounted) setState(() {});
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Yakında durak bulunamadı.')),
       );
@@ -447,65 +515,66 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     );
 
     if (!mounted) return;
+    _isFindingBusStops = false;
+    if (mounted) setState(() {});
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('${nearby.length} durak haritada gösteriliyor.')),
     );
   }
 
-  Future<List<_BusStop>> _fetchNearbyBusStops(double lat, double lng) async {
-    try {
+  Future<({List<_BusStop> items, bool requestOk})> _fetchNearbyBusStops(
+    double lat,
+    double lng,
+  ) async {
+    final seen = <String>{};
+    final merged = <_BusStop>[];
+    var requestOk = false;
+
+    for (final radius in const [1500, 3000, 6000]) {
       final query = '''
-[out:json][timeout:20];
+[out:json][timeout:35];
 (
-  node["highway"="bus_stop"](around:1200,$lat,$lng);
-  way["highway"="bus_stop"](around:1200,$lat,$lng);
-  relation["highway"="bus_stop"](around:1200,$lat,$lng);
-  node["public_transport"="platform"](around:1200,$lat,$lng);
-  way["public_transport"="platform"](around:1200,$lat,$lng);
-  relation["public_transport"="platform"](around:1200,$lat,$lng);
-  node["amenity"="bus_station"](around:2500,$lat,$lng);
-  way["amenity"="bus_station"](around:2500,$lat,$lng);
-  relation["amenity"="bus_station"](around:2500,$lat,$lng);
-  node["public_transport"="stop_position"](around:1200,$lat,$lng);
+  node["highway"="bus_stop"](around:$radius,$lat,$lng);
+  way["highway"="bus_stop"](around:$radius,$lat,$lng);
+  node["public_transport"="platform"]["bus"="yes"](around:$radius,$lat,$lng);
+  node["public_transport"="stop_position"](around:$radius,$lat,$lng);
+  node["public_transport"="stop_area"](around:$radius,$lat,$lng);
+  node["amenity"="bus_station"](around:$radius,$lat,$lng);
+  way["amenity"="bus_station"](around:$radius,$lat,$lng);
 );
-out center 80;
+out center 100;
 ''';
       final res = await _postOverpass(query);
-      if (res == null) return const [];
-      final map = jsonDecode(res.body) as Map<String, dynamic>;
-      final elements = (map['elements'] as List<dynamic>? ?? const []);
-      return elements
-          .map((e) {
-            final m = e as Map<String, dynamic>;
-            final tags = (m['tags'] as Map<String, dynamic>? ?? const {});
-            final center = m['center'] as Map<String, dynamic>?;
-            return _BusStop(
-              lat: ((m['lat'] as num?)?.toDouble() ??
-                  (center?['lat'] as num?)?.toDouble() ??
-                  0),
-              lng: ((m['lon'] as num?)?.toDouble() ??
-                  (center?['lon'] as num?)?.toDouble() ??
-                  0),
-              name: (tags['name'] as String?) ?? '',
-            );
-          })
-          .where((e) => e.lat != 0 && e.lng != 0)
-          .toList();
-    } catch (_) {
-      return const [];
+      if (res == null) {
+        if (!requestOk) return (items: const <_BusStop>[], requestOk: false);
+        break;
+      }
+      requestOk = true;
+      for (final p in _parseOverpassElements(res.body)) {
+        final key =
+            '${p.lat.toStringAsFixed(5)}_${p.lng.toStringAsFixed(5)}_${p.name}';
+        if (seen.add(key)) merged.add(p);
+      }
+      if (merged.length >= 20) break;
     }
+
+    merged.sort((a, b) {
+      final da = _distanceMeters(lat, lng, a.lat, a.lng);
+      final db = _distanceMeters(lat, lng, b.lat, b.lng);
+      return da.compareTo(db);
+    });
+    return (items: merged.take(40).toList(), requestOk: requestOk);
   }
 
-  Future<List<_BusStop>> _fetchNearbyPlaces({
+  Future<({List<_BusStop> items, bool requestOk})> _fetchNearbyPlaces({
     required double lat,
     required double lng,
     required String overpassFilter,
     required int radius,
     int outLimit = 60,
   }) async {
-    try {
-      final query = '''
-[out:json][timeout:25];
+    final query = '''
+[out:json][timeout:35];
 (
   node[$overpassFilter](around:$radius,$lat,$lng);
   way[$overpassFilter](around:$radius,$lat,$lng);
@@ -513,33 +582,12 @@ out center 80;
 );
 out center $outLimit;
 ''';
-      final res = await _postOverpass(query);
-      if (res == null) return const [];
-      final map = jsonDecode(res.body) as Map<String, dynamic>;
-      final elements = (map['elements'] as List<dynamic>? ?? const []);
-      return elements
-          .map((e) {
-            final m = e as Map<String, dynamic>;
-            final tags = (m['tags'] as Map<String, dynamic>? ?? const {});
-            final center = m['center'] as Map<String, dynamic>?;
-            return _BusStop(
-              lat: ((m['lat'] as num?)?.toDouble() ??
-                  (center?['lat'] as num?)?.toDouble() ??
-                  0),
-              lng: ((m['lon'] as num?)?.toDouble() ??
-                  (center?['lon'] as num?)?.toDouble() ??
-                  0),
-              name: (tags['name'] as String?) ?? '',
-            );
-          })
-          .where((e) => e.lat != 0 && e.lng != 0)
-          .toList();
-    } catch (_) {
-      return const [];
-    }
+    final res = await _postOverpass(query);
+    if (res == null) return (items: const <_BusStop>[], requestOk: false);
+    return (items: _parseOverpassElements(res.body), requestOk: true);
   }
 
-  Future<List<_BusStop>> _fetchNearestPlacesFast({
+  Future<({List<_BusStop> places, bool requestOk})> _fetchNearestPlacesFast({
     required double lat,
     required double lng,
     required String overpassFilter,
@@ -547,14 +595,18 @@ out center $outLimit;
     required int maxResults,
     int outLimit = 80,
   }) async {
-    final results = await _fetchNearbyPlaces(
+    final fetched = await _fetchNearbyPlaces(
       lat: lat,
       lng: lng,
       overpassFilter: overpassFilter,
       radius: radius,
       outLimit: outLimit,
     );
-    if (results.isEmpty) return const [];
+    if (!fetched.requestOk) {
+      return (places: const <_BusStop>[], requestOk: false);
+    }
+    final results = fetched.items;
+    if (results.isEmpty) return (places: const <_BusStop>[], requestOk: true);
 
     final seen = <String>{};
     final deduped = <_BusStop>[];
@@ -569,10 +621,14 @@ out center $outLimit;
       final db = _distanceMeters(lat, lng, b.lat, b.lng);
       return da.compareTo(db);
     });
-    return deduped.take(maxResults).toList();
+    return (
+      places: deduped.take(maxResults).toList(),
+      requestOk: true,
+    );
   }
 
-  Future<List<_BusStop>> _fetchNearestPlacesWithExpansion({
+  Future<({List<_BusStop> places, bool requestOk})>
+      _fetchNearestPlacesWithExpansion({
     required double lat,
     required double lng,
     required String overpassFilter,
@@ -582,27 +638,32 @@ out center $outLimit;
   }) async {
     final seen = <String>{};
     final merged = <_BusStop>[];
+    var requestOk = false;
     for (final r in radii) {
-      final batch = await _fetchNearbyPlaces(
+      final fetched = await _fetchNearbyPlaces(
         lat: lat,
         lng: lng,
         overpassFilter: overpassFilter,
         radius: r,
         outLimit: outLimit,
       );
+      if (!fetched.requestOk) continue;
+      requestOk = true;
+      final batch = fetched.items;
       for (final p in batch) {
         final key =
             '${p.lat.toStringAsFixed(5)}_${p.lng.toStringAsFixed(5)}_${p.name}';
         if (seen.add(key)) merged.add(p);
       }
     }
-    if (merged.isEmpty) return const [];
+    if (!requestOk) return (places: const <_BusStop>[], requestOk: false);
+    if (merged.isEmpty) return (places: const <_BusStop>[], requestOk: true);
     merged.sort((a, b) {
       final da = _distanceMeters(lat, lng, a.lat, a.lng);
       final db = _distanceMeters(lat, lng, b.lat, b.lng);
       return da.compareTo(db);
     });
-    return merged.take(maxResults).toList();
+    return (places: merged.take(maxResults).toList(), requestOk: true);
   }
 
   double _distanceMeters(double lat1, double lon1, double lat2, double lon2) {
@@ -661,7 +722,7 @@ out center $outLimit;
     final lat = target.latitude;
     final lng = target.longitude;
 
-    final hospitalLists = await Future.wait([
+    final hospitalBatches = await Future.wait([
       _fetchNearestPlacesFast(
         lat: lat,
         lng: lng,
@@ -696,7 +757,13 @@ out center $outLimit;
       ),
     ]);
 
-    var combined = _mergeByDistance(lat, lng, hospitalLists, 10);
+    var anyRequestOk = hospitalBatches.any((b) => b.requestOk);
+    var combined = _mergeByDistance(
+      lat,
+      lng,
+      hospitalBatches.map((b) => b.places).toList(),
+      10,
+    );
 
     if (combined.isEmpty) {
       final expanded = await Future.wait([
@@ -733,14 +800,26 @@ out center $outLimit;
           outLimit: 120,
         ),
       ]);
-      combined = _mergeByDistance(lat, lng, expanded, 10);
+      anyRequestOk = anyRequestOk || expanded.any((b) => b.requestOk);
+      combined = _mergeByDistance(
+        lat,
+        lng,
+        expanded.map((b) => b.places).toList(),
+        10,
+      );
     }
 
     if (!mounted) return;
     if (combined.isEmpty) {
       _isFindingHospitals = false;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Yakında hastane bulunamadı.')),
+        SnackBar(
+          content: Text(
+            anyRequestOk
+                ? 'Yakında hastane bulunamadı.'
+                : 'Hastane verisi alınamadı. İnternet bağlantınızı kontrol edip tekrar deneyin.',
+          ),
+        ),
       );
       return;
     }
@@ -796,7 +875,7 @@ out center $outLimit;
     final lat = target.latitude;
     final lng = target.longitude;
 
-    var pharmacies = await _fetchNearestPlacesFast(
+    var batch = await _fetchNearestPlacesFast(
       lat: lat,
       lng: lng,
       overpassFilter: '"amenity"="pharmacy"',
@@ -804,8 +883,9 @@ out center $outLimit;
       maxResults: 12,
       outLimit: 100,
     );
-    if (pharmacies.isEmpty) {
-      pharmacies = await _fetchNearestPlacesWithExpansion(
+    var anyRequestOk = batch.requestOk;
+    if (batch.places.isEmpty) {
+      batch = await _fetchNearestPlacesWithExpansion(
         lat: lat,
         lng: lng,
         overpassFilter: '"amenity"="pharmacy"',
@@ -813,13 +893,20 @@ out center $outLimit;
         maxResults: 20,
         outLimit: 120,
       );
+      anyRequestOk = anyRequestOk || batch.requestOk;
     }
-    pharmacies = _mergeByDistance(lat, lng, [pharmacies], 12);
+    final pharmacies = _mergeByDistance(lat, lng, [batch.places], 12);
     if (!mounted) return;
     if (pharmacies.isEmpty) {
       _isFindingPharmacies = false;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Yakında eczane bulunamadı.')),
+        SnackBar(
+          content: Text(
+            anyRequestOk
+                ? 'Yakında eczane bulunamadı.'
+                : 'Eczane verisi alınamadı. İnternet bağlantınızı kontrol edip tekrar deneyin.',
+          ),
+        ),
       );
       return;
     }
@@ -876,10 +963,10 @@ out center $outLimit;
   }
 
   Future<LatLng?> _resolveTargetForNearby() async {
-    if (_mapContextTarget != null) return _mapContextTarget;
     final pos = await _tryGetCurrentPosition();
-    if (pos == null) return null;
-    return LatLng(pos.latitude, pos.longitude);
+    if (pos != null) return LatLng(pos.latitude, pos.longitude);
+    if (_mapContextTarget != null) return _mapContextTarget;
+    return null;
   }
 
   /// Hastane / eczane için önce **GPS**; yoksa harita merkezi (arama sonrası yanlış “yakın” olmasın).
@@ -1880,9 +1967,14 @@ out center $outLimit;
                             ),
                             backgroundColor: Colors.white.withValues(alpha: 0.08),
                           ),
-                          onPressed: _openNearbyBusStops,
+                          onPressed:
+                              _isFindingBusStops ? null : _openNearbyBusStops,
                           icon: const Icon(Icons.directions_bus),
-                          label: const Text('Yakındaki Otobüsler'),
+                          label: Text(
+                            _isFindingBusStops
+                                ? 'Duraklar aranıyor...'
+                                : 'Yakındaki Otobüsler',
+                          ),
                         ),
                       ),
                       const SizedBox(width: 8),
